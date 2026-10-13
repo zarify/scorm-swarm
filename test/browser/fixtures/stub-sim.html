@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Stub Swarm Simulator</title>
+  <style>
+    body { margin: 0; padding: 18px; color: #18352f; font: 14px Georgia, serif; }
+    #simulator { display: grid; gap: 12px; }
+    button { padding: 9px 12px; border: 1px solid #18352f; background: #d7e96d; color: #18352f; font: 700 12px monospace; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main id="simulator" aria-label="Stub learner simulator">
+    <p id="simulator-status">Stub simulator waiting for activity settings.</p>
+    <button id="button-a" type="button">Press Alice A</button>
+  </main>
+  <script>
+    (() => {
+      const source = 'swarm-sim-bridge';
+      const pendingScene = 'U1dBUk0CAHsidHlwZSI6InN0dWIifQ==';
+      let sequence = 0;
+      let capabilities = {};
+      let replayed = false;
+
+      function send(type, payload, id) {
+        window.parent.postMessage({
+          source,
+          v: 1,
+          type,
+          ...(id === undefined ? {} : { id }),
+          ...(payload === undefined ? {} : { payload }),
+        }, location.origin);
+      }
+
+      function emit(event) {
+        sequence += 1;
+        send('event', { seq: sequence, ts: Date.now(), event });
+      }
+
+      window.addEventListener('message', (messageEvent) => {
+        if (messageEvent.source !== window.parent || messageEvent.origin !== location.origin) return;
+        const message = messageEvent.data;
+        if (!message || message.source !== 'swarm-scorm' || message.v !== 1) return;
+        if (message.type === 'set-capabilities') {
+          capabilities = message.payload || {};
+          document.getElementById('button-a').hidden = capabilities.use_buttons === false;
+          document.getElementById('simulator-status').textContent = 'Stub simulator ready in learner mode.';
+          if (!replayed) {
+            replayed = true;
+            setTimeout(() => emit({ kind: 'serial', device_id: 'alice', text: 'hello 42' }), 40);
+            setTimeout(() => emit({
+              kind: 'radio-rx',
+              device_id: 'bob',
+              from_device_id: 'alice',
+              packet: { data_b64: 'cGluZw==', group: 42, channel: 7, signal_strength: null },
+              rssi: -42,
+            }), 80);
+          }
+        } else if (message.type === 'get-bundle') {
+          send('bundle', pendingScene, message.id);
+        } else if (message.type === 'load-bundle') {
+          send('bundle', message.payload, message.id);
+        } else if (message.type === 'reset') {
+          document.getElementById('simulator-status').textContent = 'Stub simulator session reset.';
+        }
+      });
+
+      document.getElementById('button-a').addEventListener('click', () => {
+        emit({ kind: 'button', device_id: 'alice', button: 'A', pressed: true });
+      });
+      send('ready', {});
+    })();
+  </script>
+</body>
+</html>

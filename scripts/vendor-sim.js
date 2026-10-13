@@ -1,0 +1,149 @@
+import { spawn, spawnSync } from 'node:child_process';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const sourceRoot = resolve(
+  process.env.SWARM_SIM_SRC || join(homedir(), 'Code/microbit/swarm_sim'),
+);
+const vendorRoot = join(packageRoot, 'vendor/swarm-sim');
+const patchPath = 'sim-patch/edits.patch';
+const remedy =
+  'Set SWARM_SIM_SRC to the path of a swarm_sim Git checkout with a commit, then rerun npm run vendor:sim.';
+
+function fail(message) {
+  console.error(`vendor:sim: ${message}`);
+  process.exitCode = 1;
+  throw new Error(message);
+}
+
+function run(command, args, cwd, label) {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8', stdio: 'inherit' });
+  if (result.error) fail(`${label}: ${result.error.message}`);
+  if (result.status !== 0) fail(`${label} failed with exit code ${result.status ?? 'unknown'}`);
+}
+
+function archiveCommittedHead(source, destination) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    const git = spawn('git', ['-C', source, 'archive', 'HEAD'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const tar = spawn('tar', ['-x', '-C', destination], {
+      stdio: ['pipe', 'ignore', 'pipe'],
+    });
+    const errors = { git: '', tar: '' };
+    let gitStatus;
+    let tarStatus;
+    let settled = false;
+
+    git.stderr.setEncoding('utf8').on('data', (chunk) => (errors.git += chunk));
+    tar.stderr.setEncoding('utf8').on('data', (chunk) => (errors.tar += chunk));
+    git.stdout.pipe(tar.stdin);
+
+    const finish = () => {
+      if (settled || gitStatus === undefined || tarStatus === undefined) return;
+      settled = true;
+      if (gitStatus !== 0 || tarStatus !== 0) {
+        rejectPromise(
+          new Error(
+            [errors.git.trim(), errors.tar.trim()].filter(Boolean).join('\n') ||
+              `git archive exited ${gitStatus}; tar exited ${tarStatus}`,
+          ),
+        );
+      } else {
+        resolvePromise();
+      }
+    };
+
+    git.on('error', (error) => {
+      errors.git += error.message;
+      tar.kill();
+    });
+    tar.on('error', (error) => {
+      errors.tar += error.message;
+      git.kill();
+    });
+    git.on('close', (status) => {
+      gitStatus = status;
+      finish();
+    });
+    tar.on('close', (status) => {
+      tarStatus = status;
+      finish();
+    });
+  });
+}
+
+function collectFiles(root, current = root, files = []) {
+  for (const entry of readdirSync(current, { withFileTypes: true })) {
+    const absolute = join(current, entry.name);
+    if (entry.isDirectory()) collectFiles(root, absolute, files);
+    else if (entry.isFile()) files.push(relative(root, absolute).split('\\').join('/'));
+  }
+  return files;
+}
+
+async function main() {
+  if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
+    fail(`Source directory not found: ${sourceRoot}. ${remedy}`);
+  }
+
+  const revisionResult = spawnSync('git', ['-C', sourceRoot, 'rev-parse', '--verify', 'HEAD'], {
+    encoding: 'utf8',
+  });
+  if (revisionResult.status !== 0) {
+    fail(`Source has no readable HEAD commit: ${sourceRoot}. ${remedy}`);
+  }
+  const revision = revisionResult.stdout.trim();
+
+  rmSync(vendorRoot, { recursive: true, force: true });
+  mkdirSync(vendorRoot, { recursive: true });
+  await archiveCommittedHead(sourceRoot, vendorRoot);
+  writeFileSync(join(vendorRoot, '.source-revision'), `${revision}\n`);
+
+  const patchSource = join(packageRoot, 'sim-patch/src');
+  if (existsSync(patchSource)) cpSync(patchSource, join(vendorRoot, 'src'), { recursive: true });
+
+  const patchCheck = spawnSync('git', ['apply', '--check', patchPath], {
+    cwd: packageRoot,
+    encoding: 'utf8',
+  });
+  if (patchCheck.status !== 0) {
+    fail(
+      `git apply --check failed; rebase ${patchPath} against ${revision} before building.\n${[
+        patchCheck.stdout.trim(),
+        patchCheck.stderr.trim(),
+      ]
+        .filter(Boolean)
+        .join('\n')}`,
+    );
+  }
+  run('git', ['apply', patchPath], packageRoot, 'Applying simulator patch');
+  run('npm', ['ci'], vendorRoot, 'Installing vendored simulator dependencies');
+  run('npm', ['run', 'build'], vendorRoot, 'Building vendored simulator');
+
+  const simDist = join(packageRoot, 'dist/sim');
+  rmSync(simDist, { recursive: true, force: true });
+  mkdirSync(simDist, { recursive: true });
+  cpSync(join(vendorRoot, 'dist'), simDist, { recursive: true });
+  const files = collectFiles(simDist).sort((left, right) => left.localeCompare(right));
+  writeFileSync(join(packageRoot, 'dist/sim-files.json'), `${JSON.stringify(files, null, 2)}\n`);
+  console.log(`Vendored swarm_sim ${revision}; copied ${files.length} files to dist/sim/`);
+}
+
+main().catch((error) => {
+  if (process.exitCode !== 1) {
+    console.error(`vendor:sim: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
+});

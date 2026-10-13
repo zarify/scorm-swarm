@@ -1,0 +1,216 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:scorm-swarm:activity-config.schema.json",
+  "title": "Swarm SCORM activity configuration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["metadata", "evaluation"],
+  "properties": {
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["activity_id"],
+      "properties": {
+        "activity_id": { "type": "string", "pattern": "^[a-z0-9_-]+$" },
+        "title": { "type": "string", "default": "Untitled activity" },
+        "instructions_markdown": { "type": "string", "default": "" },
+        "learning_objectives_markdown": { "type": "string", "default": "" },
+        "teacher_notes_markdown": { "type": "string", "default": "" }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "move_devices": { "type": "boolean", "default": true },
+        "move_nodes": { "type": "boolean", "default": true },
+        "use_buttons": { "type": "boolean", "default": true },
+        "load_code": { "type": "boolean", "default": true },
+        "edit_code": { "type": "boolean", "default": true }
+      }
+    },
+    "evaluation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test_cases"],
+      "properties": {
+        "pass_threshold": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
+        "test_cases": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/testCase" }
+        }
+      }
+    },
+    "hints": {
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/hint" }
+    }
+  },
+  "$defs": {
+    "deviceId": { "type": ["string", "null"] },
+    "minCount": { "type": "integer", "minimum": 1, "default": 1 },
+    "nullableInteger": { "type": ["integer", "null"], "default": null },
+    "nullableNumber": { "type": ["number", "null"], "default": null },
+    "payloadMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["match", "value"],
+      "properties": {
+        "match": { "enum": ["contains", "exact", "regex", "hex"] },
+        "value": { "type": "string" },
+        "case_sensitive": { "type": "boolean", "default": true }
+      }
+    },
+    "condition": {
+      "oneOf": [
+        { "$ref": "#/$defs/composite" },
+        { "$ref": "#/$defs/serialOutput" },
+        { "$ref": "#/$defs/buttonPress" },
+        { "$ref": "#/$defs/radioTx" },
+        { "$ref": "#/$defs/radioRx" },
+        { "$ref": "#/$defs/sensorReading" }
+      ]
+    },
+    "composite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "conditions"],
+      "properties": {
+        "type": { "enum": ["all", "any", "none"] },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/condition" }
+        }
+      }
+    },
+    "serialOutput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id", "match", "value"],
+      "properties": {
+        "type": { "const": "serial_output" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "match": { "enum": ["contains", "exact", "regex"] },
+        "value": { "type": "string" },
+        "case_sensitive": { "type": "boolean", "default": true },
+        "min_count": { "$ref": "#/$defs/minCount" }
+      }
+    },
+    "buttonPress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id"],
+      "properties": {
+        "type": { "const": "button_press" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "button": { "enum": ["A", "B", "AB", "any"], "default": "any" },
+        "min_count": { "$ref": "#/$defs/minCount" }
+      }
+    },
+    "radioTx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id"],
+      "properties": {
+        "type": { "const": "radio_tx" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "channel": { "$ref": "#/$defs/nullableInteger" },
+        "group": { "$ref": "#/$defs/nullableInteger" },
+        "payload": {
+          "anyOf": [
+            { "$ref": "#/$defs/payloadMatch" },
+            { "type": "null" }
+          ],
+          "default": null
+        },
+        "min_count": { "$ref": "#/$defs/minCount" }
+      }
+    },
+    "radioRx": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id"],
+      "properties": {
+        "type": { "const": "radio_rx" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "from_device_id": { "type": ["string", "null"], "default": null },
+        "channel": { "$ref": "#/$defs/nullableInteger" },
+        "group": { "$ref": "#/$defs/nullableInteger" },
+        "payload": {
+          "anyOf": [
+            { "$ref": "#/$defs/payloadMatch" },
+            { "type": "null" }
+          ],
+          "default": null
+        },
+        "rssi_min": { "$ref": "#/$defs/nullableNumber" },
+        "rssi_max": { "$ref": "#/$defs/nullableNumber" },
+        "min_count": { "$ref": "#/$defs/minCount" }
+      }
+    },
+    "sensorReading": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id", "sensor"],
+      "properties": {
+        "type": { "const": "sensor_reading" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "sensor": {
+          "enum": [
+            "lightLevel",
+            "soundLevel",
+            "temperatureC",
+            "magneticForceX",
+            "magneticForceY",
+            "magneticForceZ"
+          ]
+        },
+        "min": { "$ref": "#/$defs/nullableNumber" },
+        "max": { "$ref": "#/$defs/nullableNumber" },
+        "min_duration_seconds": { "type": "number", "minimum": 0, "default": 0 }
+      }
+    },
+    "testCase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "type", "conditions"],
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "effect" },
+        "points": { "type": "integer", "minimum": 0, "default": 1 },
+        "feedback_on_pass": { "type": "string" },
+        "feedback_on_fail": { "type": "string" },
+        "conditions": { "$ref": "#/$defs/condition" }
+      }
+    },
+    "hint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "trigger", "message"],
+      "properties": {
+        "id": { "type": "string" },
+        "trigger": { "$ref": "#/$defs/hintTrigger" },
+        "message": { "type": "string" },
+        "priority": { "type": "integer", "minimum": 1, "default": 1 },
+        "delay_seconds": { "type": "number", "minimum": 0, "default": 0 },
+        "show_once": { "type": "boolean", "default": false },
+        "display_mode": { "enum": ["triggered", "checklist"], "default": "triggered" },
+        "style": { "enum": ["info", "success", "warning"], "default": "info" }
+      }
+    },
+    "hintTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["event", "conditions"],
+      "properties": {
+        "event": { "enum": ["sim_event", "test_fail", "manual"] },
+        "conditions": { "$ref": "#/$defs/condition" },
+        "after_attempts": { "type": "integer", "minimum": 0, "default": 0 },
+        "invalidate_on_condition_false": { "type": "boolean", "default": false }
+      }
+    }
+  }
+}

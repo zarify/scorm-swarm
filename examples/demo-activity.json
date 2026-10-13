@@ -1,0 +1,91 @@
+{
+  "metadata": {
+    "activity_id": "demo-activity",
+    "title": "Radio Relay Field Lab",
+    "instructions_markdown": "Watch **Alice** announce her message and send a radio packet. Use the event log to verify what **Bob** receives, then press Alice's A button to complete the final check.\n\nThe scene is fixed in place; focus on the effects, not the program text.",
+    "learning_objectives_markdown": "- Distinguish serial output from radio transmission.\n- Explain how radio group settings affect delivery.",
+    "teacher_notes_markdown": "The demo scene configures Bob as a group 42 receiver before Alice starts transmitting."
+  },
+  "capabilities": {
+    "move_devices": false,
+    "move_nodes": false,
+    "use_buttons": true,
+    "load_code": false,
+    "edit_code": false
+  },
+  "evaluation": {
+    "pass_threshold": 80,
+    "test_cases": [
+      {
+        "id": "serial-hello",
+        "type": "effect",
+        "points": 1,
+        "feedback_on_pass": "Alice announced hello 42.",
+        "feedback_on_fail": "Wait for Alice's serial message.",
+        "conditions": {
+          "type": "serial_output",
+          "device_id": "alice",
+          "match": "contains",
+          "value": "hello",
+          "case_sensitive": false,
+          "min_count": 1
+        }
+      },
+      {
+        "id": "radio-group-42",
+        "type": "effect",
+        "points": 2,
+        "feedback_on_pass": "Bob received a group 42 packet.",
+        "feedback_on_fail": "Check the radio event log for Bob's reception.",
+        "conditions": {
+          "type": "radio_rx",
+          "device_id": null,
+          "from_device_id": null,
+          "channel": null,
+          "group": 42,
+          "payload": null,
+          "rssi_min": null,
+          "rssi_max": null,
+          "min_count": 1
+        }
+      },
+      {
+        "id": "button-a",
+        "type": "effect",
+        "points": 1,
+        "feedback_on_pass": "You pressed A on a device.",
+        "feedback_on_fail": "Press Alice's A button in the simulator.",
+        "conditions": {
+          "type": "button_press",
+          "device_id": null,
+          "button": "A",
+          "min_count": 1
+        }
+      }
+    ]
+  },
+  "hints": [
+    {
+      "id": "serial-clue",
+      "trigger": {
+        "event": "sim_event",
+        "conditions": {
+          "type": "serial_output",
+          "device_id": "alice",
+          "match": "contains",
+          "value": "hello",
+          "case_sensitive": false,
+          "min_count": 1
+        },
+        "after_attempts": 0,
+        "invalidate_on_condition_false": false
+      },
+      "message": "Alice's serial message confirms that her program started.",
+      "priority": 2,
+      "delay_seconds": 0,
+      "show_once": true,
+      "display_mode": "triggered",
+      "style": "info"
+    }
+  ]
+}

@@ -1,0 +1,1001 @@
+diff --git a/README.md b/README.md
+index 7449d3b..57c772a 100644
+--- a/README.md
++++ b/README.md
+@@ -38,6 +38,10 @@ It supports:
+ - Locked micro:bit devices that don't have code editing and only support a single program load. Use these for mysteries students need to investigate.
+ - Locked micro:bit devices can also be fixed in place.
+ - Canvas instructions can be configured and are shown when the canvas state, saved browser state, or uploaded files are loaded.
++- Scenario authoring metadata for Moodle-oriented classroom use, including runtime target, learning goals, teacher notes, and checkpoint prompts
++- Prototype export of scenario packages as:
++  - Moodle question-bank XML for markable checkpoint questions
++  - SCORM prototype ZIP bundles that package scenario metadata, the saved `.swarm` canvas, and the Moodle XML together
+ 
+ ## What swarm isn't
+ 
+@@ -99,6 +103,35 @@ When magnet is disabled, magnet sources are preserved in project data but hidden
+ - The app is static-hostable (`npm run build` + serve `dist/` from any HTTP server).
+ - You can also just grab a current release zip (contents of `dist/`) from releases, but that will only be built with the default features on.
+ 
++## Scenario authoring and Moodle work
++
++Swarm now has an initial **scenario authoring** layer intended to make classroom simulations easier to reuse in Moodle-oriented teaching workflows.
++
++Current starting point:
++
++- author a scenario title, summary, learning objectives, teacher notes, and checkpoint prompts
++- choose a runtime target of **MakeCode** or **MicroPython**
++- export a **Moodle XML** question bank for markable checkpoint prompts
++- export a **SCORM ZIP** that keeps the scenario metadata, the saved Swarm bundle, and the Moodle question bank together
++- report an **auto-marked score and lesson status back to the LMS gradebook** from the SCORM launch page
++- support a **learner-mode launch** that can auto-load a packaged `.swarm` bundle via URL parameters
++
++Current limitation:
++
++- the SCORM export is still **not yet a full embedded Swarm runtime**
++- SCORM gradebook reporting currently comes from the package's self-contained checkpoint interactions, while the richer manual-marking path still comes from the exported **question-bank XML**
++
++## Learner-mode embedding groundwork
++
++Swarm now has a first step toward a SCORM-embedded learner mode.
++
++Supported launch parameters:
++
++- `?mode=learner` or `?learner=1` — hide most authoring controls
++- `?bundle=relative/path/to/file.swarm` — fetch and auto-load a packaged Swarm bundle on startup
++
++This means a future SCORM package can launch Swarm directly into a scenario-focused mode instead of dropping students into the general editor.
++
+ ## Implementation notes
+ 
+ Swarm was built with Copilot, mostly with GPT 5.3 Codex. I try to test fairly rigorously for the use cases under development
+diff --git a/src/components/SwarmCanvasPanel.tsx b/src/components/SwarmCanvasPanel.tsx
+index 29cd389..dc154f4 100644
+--- a/src/components/SwarmCanvasPanel.tsx
++++ b/src/components/SwarmCanvasPanel.tsx
+@@ -1,6 +1,7 @@
+ import {
+   useEffect,
+   useId,
++  useMemo,
+   useRef,
+   useState,
+   type ChangeEvent,
+@@ -14,6 +15,7 @@ import {
+   defaultDeviceNameForId,
+   defaultEnvironmentSourceName,
+   normalizeInstructionsMarkdown,
++  normalizeScenarioDefinition,
+   type DeviceEditableProgram,
+   type DeviceId,
+   type EnvironmentSource,
+@@ -64,9 +66,12 @@ import type { BrowserWorkingCopyStore } from '../domain/browserWorkingCopyStore'
+ import { createBrowserWorkingCopyStore } from '../domain/browserWorkingCopyStore';
+ import { decodeProjectBundle, encodeProjectBundle } from '../domain/projectBundle';
+ import { findReusableArtifact } from '../domain/projectArtifacts';
++import { readLaunchConfig } from '../domain/launchConfig';
+ import { DeviceCodeEditorModal } from './DeviceCodeEditorModal';
+ import { CanvasInstructionsEditorModal } from './CanvasInstructionsEditorModal';
++import { ScenarioAuthoringModal } from './ScenarioAuthoringModal';
+ import { InstructionsMarkdown } from './InstructionsMarkdown';
++import { buildScenarioMoodleXml, buildScenarioScormPackage } from '../domain/scenarioPackage';
+ import {
+   createArtifactProgramSnapshot,
+   createEditableProgramSnapshot,
+@@ -177,6 +182,10 @@ const MAX_CANVAS_NODE_NAME = 11;
+ const MAX_SIDEBAR_NODE_NAME = 28;
+ const textEncoder = new TextEncoder();
+ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
++  const launchConfig = useMemo(
++    () => readLaunchConfig(globalThis.location?.href),
++    [],
++  );
+   const [model, setModel] = useState<CanvasModel>(() => {
+     const project = createDemoProject();
+     return {
+@@ -193,6 +202,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+   const [isSplashOpen, setIsSplashOpen] = useState(false);
+   const [isDebugModalOpen, setIsDebugModalOpen] = useState(false);
+   const [isInstructionsEditorOpen, setIsInstructionsEditorOpen] = useState(false);
++  const [isScenarioAuthoringOpen, setIsScenarioAuthoringOpen] = useState(false);
+   const [isRefreshingSavedProjects, setIsRefreshingSavedProjects] = useState(false);
+   const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
+   const [isBundleDropActive, setIsBundleDropActive] = useState(false);
+@@ -251,7 +261,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       : project.devices.find((device) => device.id === editorDeviceId);
+   const activeEditorProgram = editorDevice ? getActiveEditableProgram(editorDevice) : undefined;
+   const customInstructionsMarkdown = project.instructionsMarkdown;
++  const scenarioDefinition = project.scenarioDefinition;
+   const hasCustomInstructions = Boolean(customInstructionsMarkdown);
++  const hasScenarioDefinition = Boolean(scenarioDefinition);
++  const isLearnerMode = launchConfig.learnerMode;
+   const canvasSaveStatus = hasUnsavedCanvasChanges
+     ? 'Unsaved'
+     : hasSavedWorkingCopy
+@@ -289,7 +302,45 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       return;
+     }
+     let cancelled = false;
++    const launchBundlePath = launchConfig.bundlePath;
+     try {
++      if (launchBundlePath) {
++        void (async () => {
++          try {
++            const response = await fetch(launchBundlePath);
++            if (!response.ok) {
++              throw new Error(`Unable to load bundled scenario: ${response.status}`);
++            }
++            const bundleBytes = new Uint8Array(await response.arrayBuffer());
++            const bundledProject = await decodeProjectBundle(bundleBytes);
++            if (cancelled) {
++              return;
++            }
++            hasHydratedWorkingCopy.current = true;
++            setHasSavedWorkingCopy(false);
++            replaceScenarioProject(bundledProject, {
++              hasUnsavedChanges: false,
++              recordUserInteraction: false,
++              reopenSplash: true,
++            });
++            setCanvasStateMessage(`Loaded bundled scenario "${bundledProject.name}"`);
++          } catch (error) {
++            if (cancelled) {
++              return;
++            }
++            hasHydratedWorkingCopy.current = true;
++            setHasSavedWorkingCopy(false);
++            setIsSplashOpen(true);
++            setCanvasStateMessage(
++              error instanceof Error ? error.message : 'Unable to load bundled scenario',
++            );
++          }
++        })();
++        return () => {
++          cancelled = true;
++        };
++      }
++
+       browserProjectStore.current ??= createBrowserProjectStore();
+       browserWorkingCopyStore.current ??= createBrowserWorkingCopyStore();
+       void (async () => {
+@@ -337,7 +388,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     return () => {
+       cancelled = true;
+     };
+-  }, []);
++  }, [launchConfig.bundlePath]);
+ 
+   useEffect(() => {
+     if (!isCanvasStateMenuOpen) {
+@@ -1705,7 +1756,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       )
+     : undefined;
+   const canDropHexToSidebar = Boolean(
+-    selectedDevice && canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
++    !isLearnerMode &&
++      selectedDevice &&
++      canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
+   );
+ 
+   function handleSidebarDragOver(event: DragEvent<HTMLElement>) {
+@@ -2027,6 +2080,74 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     setIsInstructionsEditorOpen(false);
+   }
+ 
++  function saveScenarioDefinition(nextScenario: SwarmProject['scenarioDefinition']) {
++    const normalizedScenario = normalizeScenarioDefinition(nextScenario);
++    if (
++      JSON.stringify(normalizedScenario) === JSON.stringify(project.scenarioDefinition)
++    ) {
++      setIsScenarioAuthoringOpen(false);
++      return;
++    }
++    updateProject((current) => {
++      const { scenarioDefinition: _existingScenarioDefinition, ...rest } = current;
++      return normalizedScenario ? { ...rest, scenarioDefinition: normalizedScenario } : rest;
++    });
++    setCanvasStateMessage(
++      normalizedScenario ? 'Saved scenario authoring details' : 'Cleared scenario authoring details',
++    );
++    setIsScenarioAuthoringOpen(false);
++  }
++
++  async function downloadScenarioScormPackage() {
++    if (!project.scenarioDefinition) {
++      setCanvasStateMessage('Add scenario authoring details before exporting a SCORM package');
++      return;
++    }
++
++    try {
++      const zipBytes = await buildScenarioScormPackage(project);
++      const blob = new Blob([new Uint8Array(zipBytes).buffer], { type: 'application/zip' });
++      const url = URL.createObjectURL(blob);
++      const anchor = document.createElement('a');
++      anchor.href = url;
++      anchor.download = `${slugForFilename(project.name)}-scenario-scorm.zip`;
++      document.body.append(anchor);
++      anchor.click();
++      anchor.remove();
++      URL.revokeObjectURL(url);
++      setCanvasStateMessage('Downloaded scenario SCORM prototype package');
++    } catch (error) {
++      setCanvasStateMessage(
++        error instanceof Error ? error.message : 'Unable to download scenario SCORM package',
++      );
++    }
++  }
++
++  async function downloadScenarioMoodleQuestions() {
++    if (!project.scenarioDefinition) {
++      setCanvasStateMessage('Add scenario authoring details before exporting Moodle questions');
++      return;
++    }
++
++    try {
++      const xml = buildScenarioMoodleXml(project);
++      const blob = new Blob([xml], { type: 'application/xml' });
++      const url = URL.createObjectURL(blob);
++      const anchor = document.createElement('a');
++      anchor.href = url;
++      anchor.download = `${slugForFilename(project.name)}-scenario-questions.xml`;
++      document.body.append(anchor);
++      anchor.click();
++      anchor.remove();
++      URL.revokeObjectURL(url);
++      setCanvasStateMessage('Downloaded scenario Moodle question bank');
++    } catch (error) {
++      setCanvasStateMessage(
++        error instanceof Error ? error.message : 'Unable to download scenario Moodle question bank',
++      );
++    }
++  }
++
+   function handleBundleFileInput(event: ChangeEvent<HTMLInputElement>) {
+     const file = event.target.files?.[0];
+     if (file) {
+@@ -2092,24 +2213,26 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+           </a>
+         </div>
+         <div className="control-stack" aria-label="Simulation controls">
+-          <button
+-            type="button"
+-            className={
+-              hasUnsavedCanvasChanges
+-                ? 'canvas-save-button canvas-save-button--dirty'
+-                : hasSavedWorkingCopy
+-                  ? 'canvas-save-button canvas-save-button--saved'
+-                  : 'canvas-save-button'
+-            }
+-            aria-label={canvasSaveButtonAriaLabel}
+-            title={canvasSaveButtonTitle}
+-            onClick={() => void saveCurrentCanvasToBrowser()}
+-          >
+-            <strong>Save canvas</strong>
+-            <span className="canvas-save-button__status" aria-live="polite">
+-              {canvasSaveStatus}
+-            </span>
+-          </button>
++          {!isLearnerMode ? (
++            <button
++              type="button"
++              className={
++                hasUnsavedCanvasChanges
++                  ? 'canvas-save-button canvas-save-button--dirty'
++                  : hasSavedWorkingCopy
++                    ? 'canvas-save-button canvas-save-button--saved'
++                    : 'canvas-save-button'
++              }
++              aria-label={canvasSaveButtonAriaLabel}
++              title={canvasSaveButtonTitle}
++              onClick={() => void saveCurrentCanvasToBrowser()}
++            >
++              <strong>Save canvas</strong>
++              <span className="canvas-save-button__status" aria-live="polite">
++                {canvasSaveStatus}
++              </span>
++            </button>
++          ) : null}
+           {hasCustomInstructions ? (
+             <button
+               type="button"
+@@ -2130,22 +2253,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+           >
+             <span aria-hidden="true">↺</span> Reset
+           </button>
+-          <button
+-            type="button"
+-            className="button-with-icon"
+-            aria-expanded={isCanvasStateMenuOpen}
+-            aria-controls="canvas-state-panel"
+-            title="Open swarm tools"
+-            onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
+-          >
+-            <span className="button-icon button-icon--toolbar" aria-hidden="true">
+-              ⚙
+-            </span>
+-            Swarm tools
+-          </button>
++          {!isLearnerMode ? (
++            <button
++              type="button"
++              className="button-with-icon"
++              aria-expanded={isCanvasStateMenuOpen}
++              aria-controls="canvas-state-panel"
++              title="Open swarm tools"
++              onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
++            >
++              <span className="button-icon button-icon--toolbar" aria-hidden="true">
++                ⚙
++              </span>
++              Swarm tools
++            </button>
++          ) : null}
+         </div>
+       </div>
+-      {isCanvasStateMenuOpen ? (
++      {isCanvasStateMenuOpen && !isLearnerMode ? (
+         <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Swarm tool controls">
+           <div className="canvas-state-panel__section">
+             <span className="metric-label">Swarm tools</span>
+@@ -2227,6 +2352,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+               >
+                 Edit instructions
+               </button>
++              <button
++                type="button"
++                onClick={() => setIsScenarioAuthoringOpen(true)}
++                title="Edit scenario authoring"
++              >
++                Scenario authoring
++              </button>
+               <button type="button" onClick={() => void saveCurrentLayoutToBrowser()} title="Save layout to browser">
+                 Save to browser
+               </button>
+@@ -2241,6 +2373,26 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                 </span>
+                 Download bundle
+               </button>
++              <button
++                type="button"
++                className="button-with-icon"
++                onClick={() => void downloadScenarioScormPackage()}
++                disabled={!hasScenarioDefinition}
++                title="Download scenario SCORM prototype package"
++              >
++                <span className="button-icon button-icon--bundle" aria-hidden="true">
++                  ⬇
++                </span>
++                Download SCORM prototype
++              </button>
++              <button
++                type="button"
++                onClick={() => void downloadScenarioMoodleQuestions()}
++                disabled={!hasScenarioDefinition}
++                title="Download scenario Moodle question bank"
++              >
++                Download Moodle XML
++              </button>
+               <label className="canvas-state-upload" title="Upload canvas bundle">
+                 <span className="button-icon button-icon--bundle" aria-hidden="true">
+                   ⬆
+@@ -2305,6 +2457,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+             )}
+           </div>
+           {canvasStateMessage ? <p className="hint">{canvasStateMessage}</p> : null}
++          {scenarioDefinition ? (
++            <div className="canvas-state-scenario">
++              <span className="metric-label">Scenario</span>
++              <strong>{scenarioDefinition.title}</strong>
++              <p className="hint">
++                Target: {scenarioDefinition.runtimeTarget === 'micropython' ? 'MicroPython' : 'MakeCode'} ·
++                {' '}
++                {scenarioDefinition.checkpoints.length} checkpoint
++                {scenarioDefinition.checkpoints.length === 1 ? '' : 's'}
++              </p>
++            </div>
++          ) : null}
+         </div>
+       ) : null}
+       {isSplashOpen ? (
+@@ -2351,6 +2515,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+           onSave={saveCanvasInstructions}
+         />
+       ) : null}
++      {isScenarioAuthoringOpen ? (
++        <ScenarioAuthoringModal
++          initialScenario={project.scenarioDefinition}
++          onClose={() => setIsScenarioAuthoringOpen(false)}
++          onSave={saveScenarioDefinition}
++        />
++      ) : null}
+ 
+       <div className="swarm-layout">
+         <div className="canvas-wrap">
+@@ -2640,6 +2811,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+               <>
+                 <DeviceSelection
+                   project={project}
++                  readOnly={isLearnerMode}
+                   runtime={simulationState.devices[selectedDevice.id]}
+                   showMagneticReadings={FEATURE_FLAGS.magnet}
+                   runtimeLoadResult={selectedRuntimeLoadResult}
+@@ -2665,6 +2837,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+             ) : selectedSource ? (
+               <SourceSelection
+                 source={selectedSource}
++                readOnly={isLearnerMode}
+                 updateSource={updateSource}
+                 onDeleteNode={deleteSelectedNode}
+                 onTogglePositionPin={toggleSourcePositionPin}
+@@ -2709,18 +2882,20 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+               )}
+             </div>
+           </details>
+-          <div className="swarm-sidebar-footer">
+-            <button
+-              type="button"
+-              className="swarm-sidebar-debug-button"
+-              aria-haspopup="dialog"
+-              aria-expanded={isDebugModalOpen}
+-              aria-controls="debug-tools-modal"
+-              onClick={() => setIsDebugModalOpen(true)}
+-            >
+-              Debug
+-            </button>
+-          </div>
++          {!isLearnerMode ? (
++            <div className="swarm-sidebar-footer">
++              <button
++                type="button"
++                className="swarm-sidebar-debug-button"
++                aria-haspopup="dialog"
++                aria-expanded={isDebugModalOpen}
++                aria-controls="debug-tools-modal"
++                onClick={() => setIsDebugModalOpen(true)}
++              >
++                Debug
++              </button>
++            </div>
++          ) : null}
+         </aside>
+       </div>
+       <div
+@@ -2781,6 +2956,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+ 
+ function DeviceSelection({
+   project,
++  readOnly = false,
+   deviceId,
+   showMagneticReadings,
+   runtime,
+@@ -2803,6 +2979,7 @@ function DeviceSelection({
+   onCancelRename,
+ }: {
+   project: SwarmProject;
++  readOnly?: boolean;
+   deviceId: DeviceId;
+   showMagneticReadings: boolean;
+   runtime?: DeviceRuntimeState;
+@@ -2855,23 +3032,27 @@ function DeviceSelection({
+         onBeginRename={onBeginRename}
+         onCommitRename={onCommitRename}
+         onCancelRename={onCancelRename}
+-        renameDisabled={renameLocked}
+-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
++        renameDisabled={readOnly || renameLocked}
++        renameDisabledTitle={readOnly ? 'Learner mode hides rename controls' : 'Pinned locked nodes cannot be renamed'}
+       />
+       <div className="selection-actions">
+         <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
+           <span aria-hidden="true">↺</span> Reset
+         </button>
+-        <button type="button" onClick={onDeleteNode}>
+-          <span aria-hidden="true">🗑</span> Delete
+-        </button>
+-        <PositionPinButton
+-          title={pinControl.title}
+-          active={positionPinned}
+-          disabled={pinControl.disabled}
+-          onClick={() => onTogglePositionPin(device.id)}
+-        />
+-        {!locked ? (
++        {!readOnly ? (
++          <button type="button" onClick={onDeleteNode}>
++            <span aria-hidden="true">🗑</span> Delete
++          </button>
++        ) : null}
++        {!readOnly ? (
++          <PositionPinButton
++            title={pinControl.title}
++            active={positionPinned}
++            disabled={pinControl.disabled}
++            onClick={() => onTogglePositionPin(device.id)}
++          />
++        ) : null}
++        {!locked && !readOnly ? (
+           <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
+             <span aria-hidden="true">✎</span> Edit code
+           </button>
+@@ -2941,7 +3122,7 @@ function DeviceSelection({
+             <p>Position and name locked</p>
+           </div>
+         ) : null}
+-        {canAssignCode ? (
++        {canAssignCode && !readOnly ? (
+           <label className="artifact-field artifact-field--compact">
+             Load code onto {device.name}
+             <input
+@@ -2995,6 +3176,7 @@ function DeviceSelection({
+ 
+ function SourceSelection({
+   source,
++  readOnly = false,
+   updateSource,
+   onDeleteNode,
+   onTogglePositionPin,
+@@ -3006,6 +3188,7 @@ function SourceSelection({
+   onCancelRename,
+ }: {
+   source: EnvironmentSource;
++  readOnly?: boolean;
+   updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
+   onDeleteNode: () => void;
+   onTogglePositionPin: (sourceId: EnvironmentSourceId) => void;
+@@ -3038,8 +3221,8 @@ function SourceSelection({
+         onBeginRename={onBeginRename}
+         onCommitRename={onCommitRename}
+         onCancelRename={onCancelRename}
+-        renameDisabled={propertiesLocked}
+-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
++        renameDisabled={readOnly || propertiesLocked}
++        renameDisabledTitle={readOnly ? 'Learner mode hides rename controls' : 'Pinned locked nodes cannot be renamed'}
+       />
+       <p className="hint">
+         {source.type === 'light'
+@@ -3051,22 +3234,27 @@ function SourceSelection({
+               : 'Magnet source'}
+       </p>
+       <div className="selection-actions">
+-        <button type="button" onClick={onDeleteNode}>
+-          <span aria-hidden="true">🗑</span> Delete
+-        </button>
+-        <PositionPinButton
+-          title={pinControl.title}
+-          active={positionPinned}
+-          disabled={pinControl.disabled}
+-          onClick={() => onTogglePositionPin(source.id)}
+-        />
++        {!readOnly ? (
++          <button type="button" onClick={onDeleteNode}>
++            <span aria-hidden="true">🗑</span> Delete
++          </button>
++        ) : null}
++        {!readOnly ? (
++          <PositionPinButton
++            title={pinControl.title}
++            active={positionPinned}
++            disabled={pinControl.disabled}
++            onClick={() => onTogglePositionPin(source.id)}
++          />
++        ) : null}
+       </div>
+       {locked ? (
+         <div className="selection-position-lock">
+           <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
+         </div>
+       ) : null}
+-      <RangeValueField
++      {!readOnly ? (
++        <RangeValueField
+         label="Radius"
+         min={40}
+         max={280}
+@@ -3074,8 +3262,9 @@ function SourceSelection({
+         value={source.radius}
+         disabled={propertiesLocked}
+         onValueChange={(radius) => updateSource(source.id, { radius })}
+-      />
+-      {source.type === 'magnet' ? (
++        />
++      ) : null}
++      {!readOnly && source.type === 'magnet' ? (
+         <>
+           <RangeValueField
+             label="Angle"
+@@ -3100,7 +3289,7 @@ function SourceSelection({
+             }
+           />
+         </>
+-      ) : source.type === 'temperature' ? (
++      ) : !readOnly && source.type === 'temperature' ? (
+         <>
+           <label className="range-field">
+             Mode
+@@ -3131,7 +3320,7 @@ function SourceSelection({
+             }
+           />
+         </>
+-      ) : (
++      ) : !readOnly ? (
+         <RangeValueField
+           label="Peak level (micro:bit scale)"
+           min={MICROBIT_SENSOR_LEVEL_MIN}
+@@ -3145,7 +3334,7 @@ function SourceSelection({
+             })
+           }
+         />
+-      )}
++      ) : null}
+     </>
+   );
+ }
+diff --git a/src/domain/project.ts b/src/domain/project.ts
+index e111ddc..72f676d 100644
+--- a/src/domain/project.ts
++++ b/src/domain/project.ts
+@@ -1,6 +1,6 @@
+ import type { ArtifactKind, RuntimeSource } from '../runtime/types';
+ 
+-export const PROJECT_SCHEMA_VERSION = 9;
++export const PROJECT_SCHEMA_VERSION = 10;
+ 
+ export type ProjectId = string;
+ export type DeviceId = string;
+@@ -16,6 +16,23 @@ export interface CanvasViewOptions {
+   showRadioRange: boolean;
+ }
+ 
++export type ScenarioRuntimeTarget = Exclude<RuntimeSource, 'unknown'>;
++
++export interface ScenarioCheckpoint {
++  id: string;
++  prompt: string;
++  expectedKeywords: string[];
++}
++
++export interface ScenarioDefinition {
++  title: string;
++  summary: string;
++  runtimeTarget: ScenarioRuntimeTarget;
++  learningObjectivesMarkdown?: string;
++  teacherNotesMarkdown?: string;
++  checkpoints: ScenarioCheckpoint[];
++}
++
+ export const DEFAULT_CANVAS_VIEW_OPTIONS: CanvasViewOptions = {
+   showRadioRange: true,
+ };
+@@ -137,6 +154,7 @@ export interface SwarmProject {
+   updatedAt: string;
+   viewOptions: CanvasViewOptions;
+   instructionsMarkdown?: string;
++  scenarioDefinition?: ScenarioDefinition;
+   devices: VirtualDevice[];
+   artifacts: ProgramArtifact[];
+   environmentSources: EnvironmentSource[];
+@@ -176,6 +194,41 @@ export function normalizeInstructionsMarkdown(value: string | undefined): string
+   return normalized.length > 0 ? normalized : undefined;
+ }
+ 
++export function normalizeScenarioDefinition(
++  value: Partial<ScenarioDefinition> | undefined,
++): ScenarioDefinition | undefined {
++  if (!value) {
++    return undefined;
++  }
++
++  const title = value.title?.trim() ?? '';
++  const summary = value.summary?.trim() ?? '';
++  const checkpoints = (value.checkpoints ?? [])
++    .map((checkpoint, index) => normalizeScenarioCheckpoint(checkpoint, index))
++    .filter((checkpoint): checkpoint is ScenarioCheckpoint => checkpoint !== undefined);
++  const learningObjectivesMarkdown = normalizeInstructionsMarkdown(value.learningObjectivesMarkdown);
++  const teacherNotesMarkdown = normalizeInstructionsMarkdown(value.teacherNotesMarkdown);
++
++  if (
++    title.length === 0 &&
++    summary.length === 0 &&
++    checkpoints.length === 0 &&
++    !learningObjectivesMarkdown &&
++    !teacherNotesMarkdown
++  ) {
++    return undefined;
++  }
++
++  return {
++    title: title || 'Scenario',
++    summary,
++    runtimeTarget: value.runtimeTarget === 'micropython' ? 'micropython' : 'makecode-pxt',
++    ...(learningObjectivesMarkdown ? { learningObjectivesMarkdown } : {}),
++    ...(teacherNotesMarkdown ? { teacherNotesMarkdown } : {}),
++    checkpoints,
++  };
++}
++
+ export function summarizeProject(project: SwarmProject): ProjectSummary {
+   return {
+     id: project.id,
+@@ -228,3 +281,27 @@ function toTitleCaseWords(value: string): string {
+     .map((word) => `${word[0]?.toUpperCase() ?? ''}${word.slice(1)}`);
+   return words.join(' ');
+ }
++
++function normalizeScenarioCheckpoint(
++  value: Partial<ScenarioCheckpoint> | undefined,
++  index: number,
++): ScenarioCheckpoint | undefined {
++  if (!value) {
++    return undefined;
++  }
++
++  const prompt = value.prompt?.trim() ?? '';
++  const expectedKeywords = Array.from(
++    new Set((value.expectedKeywords ?? []).map((keyword) => keyword.trim()).filter(Boolean)),
++  );
++
++  if (prompt.length === 0 && expectedKeywords.length === 0) {
++    return undefined;
++  }
++
++  return {
++    id: value.id?.trim() || `checkpoint-${index + 1}`,
++    prompt,
++    expectedKeywords,
++  };
++}
+diff --git a/src/domain/projectBundle.test.ts b/src/domain/projectBundle.test.ts
+index 165edc3..e1d9f22 100644
+--- a/src/domain/projectBundle.test.ts
++++ b/src/domain/projectBundle.test.ts
+@@ -71,6 +71,28 @@ describe('project bundle codec', () => {
+     expect(reopened.instructionsMarkdown).toBe(project.instructionsMarkdown);
+   });
+ 
++  it('round-trips scenario authoring inside canvas bundles', async () => {
++    const project: SwarmProject = {
++      ...makeMixedRuntimeProject(),
++      scenarioDefinition: {
++        title: 'Relay fault scenario',
++        summary: 'Students investigate a broken relay path.',
++        runtimeTarget: 'makecode-pxt',
++        checkpoints: [
++          {
++            id: 'checkpoint-1',
++            prompt: 'Why did the final node miss the message?',
++            expectedKeywords: ['range', 'group'],
++          },
++        ],
++      },
++    };
++
++    const reopened = await decodeProjectBundle(await encodeProjectBundle(project));
++
++    expect(reopened.scenarioDefinition).toEqual(project.scenarioDefinition);
++  });
++
+   it('round-trips view options and locked source pinning inside canvas bundles', async () => {
+     const project: SwarmProject = {
+       ...makeMixedRuntimeProject(),
+diff --git a/src/domain/projectSerialization.test.ts b/src/domain/projectSerialization.test.ts
+index f9f0c2d..5117728 100644
+--- a/src/domain/projectSerialization.test.ts
++++ b/src/domain/projectSerialization.test.ts
+@@ -162,6 +162,28 @@ describe('project serialization', () => {
+     expect(deserializeProject(serializeProject(project))).toEqual(project);
+   });
+ 
++  it('round-trips scenario authoring metadata', () => {
++    const project = {
++      ...makeProject(),
++      scenarioDefinition: {
++        title: 'Radio relay investigation',
++        summary: 'Students explain why a relay path failed.',
++        runtimeTarget: 'micropython',
++        learningObjectivesMarkdown: '- Trace the packet path\n- Identify the failure point',
++        teacherNotesMarkdown: '- Pause after the first failed delivery',
++        checkpoints: [
++          {
++            id: 'checkpoint-1',
++            prompt: 'What caused the failure?',
++            expectedKeywords: ['radio', 'group', 'packet'],
++          },
++        ],
++      },
++    } satisfies SwarmProject;
++
++    expect(deserializeProject(serializeProject(project))).toEqual(project);
++  });
++
+   it('normalizes blank instructions to the default quick-start state', () => {
+     const parsed = JSON.parse(serializeProject(makeProject())) as Record<string, unknown>;
+     parsed.instructionsMarkdown = ' \n\n ';
+diff --git a/src/domain/projectSerialization.ts b/src/domain/projectSerialization.ts
+index c4ab0cd..ec82b16 100644
+--- a/src/domain/projectSerialization.ts
++++ b/src/domain/projectSerialization.ts
+@@ -1,6 +1,7 @@
+ import {
+   normalizeCanvasViewOptions,
+   normalizeInstructionsMarkdown,
++  normalizeScenarioDefinition,
+   defaultEnvironmentSourceName,
+   PROJECT_SCHEMA_VERSION,
+   type ArtifactProgram,
+@@ -24,6 +25,7 @@ export interface SerializedSwarmProject extends Omit<SwarmProject, 'artifacts'>
+ export function serializeProject(project: SwarmProject): string {
+   const serialized: SerializedSwarmProject = {
+     ...project,
++    ...(project.scenarioDefinition === undefined ? {} : { scenarioDefinition: project.scenarioDefinition }),
+     artifacts: project.artifacts.map((artifact) => ({
+       id: artifact.id,
+       name: artifact.name,
+@@ -57,6 +59,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
+     schemaVersion !== 6 &&
+     schemaVersion !== 7 &&
+     schemaVersion !== 8 &&
++    schemaVersion !== 9 &&
+     schemaVersion !== PROJECT_SCHEMA_VERSION
+   ) {
+     throw new Error(`Unsupported project schema version: ${schemaVersion}`);
+@@ -65,6 +68,10 @@ function parseSerializedProject(value: unknown): SwarmProject {
+   const instructionsMarkdown = normalizeInstructionsMarkdown(
+     expectOptionalString(project.instructionsMarkdown, 'instructionsMarkdown'),
+   );
++  const scenarioDefinition = parseScenarioDefinition(
++    project.scenarioDefinition,
++    'scenarioDefinition',
++  );
+ 
+   return {
+     schemaVersion: PROJECT_SCHEMA_VERSION,
+@@ -74,6 +81,7 @@ function parseSerializedProject(value: unknown): SwarmProject {
+     updatedAt: expectString(project.updatedAt, 'updatedAt'),
+     viewOptions: parseCanvasViewOptions(project.viewOptions, schemaVersion),
+     ...(instructionsMarkdown ? { instructionsMarkdown } : {}),
++    ...(scenarioDefinition ? { scenarioDefinition } : {}),
+     devices: expectArray(project.devices, 'devices').map(parseDevice),
+     artifacts: expectArray(project.artifacts, 'artifacts').map(parseArtifact),
+     environmentSources: expectArray(project.environmentSources, 'environmentSources').map((source) =>
+@@ -82,6 +90,43 @@ function parseSerializedProject(value: unknown): SwarmProject {
+   };
+ }
+ 
++function parseScenarioDefinition(value: unknown, label: string) {
++  if (value === undefined) {
++    return undefined;
++  }
++
++  const scenario = expectRecord(value, label);
++  return normalizeScenarioDefinition({
++    title: expectOptionalString(scenario.title, `${label}.title`) ?? '',
++    summary: expectOptionalString(scenario.summary, `${label}.summary`) ?? '',
++    runtimeTarget: parseScenarioRuntimeTarget(
++      expectOptionalString(scenario.runtimeTarget, `${label}.runtimeTarget`) ?? 'makecode-pxt',
++      `${label}.runtimeTarget`,
++    ),
++    learningObjectivesMarkdown: expectOptionalString(
++      scenario.learningObjectivesMarkdown,
++      `${label}.learningObjectivesMarkdown`,
++    ),
++    teacherNotesMarkdown: expectOptionalString(
++      scenario.teacherNotesMarkdown,
++      `${label}.teacherNotesMarkdown`,
++    ),
++    checkpoints: expectOptionalArray(scenario.checkpoints, `${label}.checkpoints`)?.map(
++      (checkpoint, index) => parseScenarioCheckpoint(checkpoint, `${label}.checkpoints[${index}]`),
++    ),
++  });
++}
++
++function parseScenarioCheckpoint(value: unknown, label: string) {
++  const checkpoint = expectRecord(value, label);
++  return {
++    id: expectString(checkpoint.id, `${label}.id`),
++    prompt: expectOptionalString(checkpoint.prompt, `${label}.prompt`) ?? '',
++    expectedKeywords: expectOptionalArray(checkpoint.expectedKeywords, `${label}.expectedKeywords`)
++      ?.map((keyword, index) => expectString(keyword, `${label}.expectedKeywords[${index}]`)) ?? [],
++  };
++}
++
+ function serializeArtifactProgram(program: ArtifactProgram): ArtifactProgram {
+   switch (program.runtimeSource) {
+     case 'micropython':
+@@ -304,6 +349,17 @@ function parseRuntimeSource(value: unknown): RuntimeSource {
+   throw new Error(`Invalid runtime source: ${runtimeSource}`);
+ }
+ 
++function parseScenarioRuntimeTarget(
++  value: string,
++  label: string,
++): 'makecode-pxt' | 'micropython' {
++  if (value === 'makecode-pxt' || value === 'micropython') {
++    return value;
++  }
++
++  throw new Error(`Invalid ${label}: ${value}`);
++}
++
+ function parseEditableProgram(value: unknown, label: string): DeviceEditableProgram {
+   const editableProgram = expectRecord(value, label);
+   const runtimeSource = parseRuntimeSource(editableProgram.runtimeSource);
+@@ -352,6 +408,13 @@ function expectArray(value: unknown, label: string): unknown[] {
+   return value;
+ }
+ 
++function expectOptionalArray(value: unknown, label: string): unknown[] | undefined {
++  if (value === undefined) {
++    return undefined;
++  }
++  return expectArray(value, label);
++}
++
+ function expectOptionalString(value: unknown, label: string): string | undefined {
+   if (value === undefined) {
+     return undefined;
+diff --git a/src/styles.css b/src/styles.css
+index e3abf64..5317390 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -346,6 +346,48 @@ h2 {
+   margin-top: 16px;
+ }
+ 
++.scenario-editor-grid {
++  display: grid;
++  grid-template-columns: repeat(2, minmax(0, 1fr));
++  gap: 14px;
++  margin-top: 14px;
++}
++
++.scenario-editor-field {
++  display: grid;
++  gap: 6px;
++}
++
++.scenario-editor-field span {
++  color: var(--muted);
++  font-size: 0.82rem;
++  text-transform: uppercase;
++  letter-spacing: 0.08em;
++}
++
++.scenario-editor-field input,
++.scenario-editor-field select,
++.scenario-editor-field textarea {
++  width: 100%;
++  border: 1px solid rgba(105, 247, 255, 0.34);
++  padding: 12px 14px;
++  background: rgba(2, 10, 11, 0.88);
++  color: var(--ink);
++  font: inherit;
++}
++
++.scenario-editor-field--wide {
++  grid-column: 1 / -1;
++}
++
++.scenario-editor-textarea {
++  min-height: 160px;
++}
++
++.scenario-editor-textarea--short {
++  min-height: 110px;
++}
++
+ .code-editor-modal__header {
+   display: flex;
+   flex-wrap: wrap;
+@@ -773,6 +815,13 @@ h2 {
+   gap: 8px;
+ }
+ 
++.canvas-state-scenario {
++  display: grid;
++  gap: 6px;
++  border-top: 1px solid rgba(105, 247, 255, 0.16);
++  padding-top: 10px;
++}
++
+ .canvas-state-saved__row {
+   display: flex;
+   gap: 8px;

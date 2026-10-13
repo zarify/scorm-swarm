@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Swarm Scenario Studio</title>
+  <link rel="stylesheet" href="css/builder.css">
+</head>
+<body>
+  <div id="builder-app">
+    <header id="builder-header">
+      <a class="brand-lockup" href="#config" aria-label="Swarm Scenario Studio home">
+        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
+        <span>
+          <span class="brand-kicker">Micro:bit classroom lab</span>
+          <h1>Swarm Scenario Studio</h1>
+        </span>
+      </a>
+      <div id="header-actions" aria-label="Activity file actions">
+        <button id="btn-import" class="btn btn-secondary" type="button">Import</button>
+        <input id="file-import" type="file" accept=".json,application/json" hidden>
+        <button id="btn-export-json" class="btn btn-secondary" type="button">Export JSON</button>
+        <button id="btn-export-scorm" class="btn btn-accent" type="button">Export SCORM</button>
+      </div>
+    </header>
+
+    <nav id="tab-nav" role="tablist" aria-label="Activity authoring sections">
+      <button class="tab-btn active" id="tab-button-config" type="button" role="tab" aria-selected="true" aria-controls="tab-config" data-tab="config">01 <span>Config</span></button>
+      <button class="tab-btn" id="tab-button-scenario" type="button" role="tab" aria-selected="false" aria-controls="tab-scenario" data-tab="scenario">02 <span>Scenario</span></button>
+      <button class="tab-btn" id="tab-button-hints" type="button" role="tab" aria-selected="false" aria-controls="tab-hints" data-tab="hints">03 <span>Hints</span></button>
+      <button class="tab-btn" id="tab-button-tests" type="button" role="tab" aria-selected="false" aria-controls="tab-tests" data-tab="tests">04 <span>Tests</span></button>
+      <button class="tab-btn" id="tab-button-preview" type="button" role="tab" aria-selected="false" aria-controls="tab-preview" data-tab="preview">05 <span>Preview</span></button>
+    </nav>
+
+    <main id="tab-content">
+      <section id="tab-config" class="tab-panel active" role="tabpanel" aria-labelledby="tab-button-config">
+        <div class="page-heading">
+          <p class="eyebrow">Activity blueprint / 01</p>
+          <h2>Set the boundaries of the experiment.</h2>
+          <p>Name the activity, write the learner brief, and decide which parts of the swarm may move.</p>
+        </div>
+        <div class="config-grid">
+          <section class="form-section config-copy-card">
+            <div class="card-heading"><span class="card-index">A</span><div><p class="eyebrow">Learner-facing brief</p><h3>Activity identity</h3></div></div>
+            <div class="form-group">
+              <label for="cfg-title">Activity title</label>
+              <input id="cfg-title" type="text" autocomplete="off" placeholder="e.g. The quiet radio relay">
+            </div>
+            <div class="form-group">
+              <label for="cfg-activity-id">Activity ID</label>
+              <input id="cfg-activity-id" type="text" autocomplete="off" spellcheck="false" placeholder="radio-relay">
+              <small>Lowercase letters, numbers, underscores, and hyphens.</small>
+            </div>
+            <div class="form-group">
+              <label for="cfg-instructions">Instructions</label>
+              <textarea id="cfg-instructions" rows="5" placeholder="Explain the task and what evidence learners should observe."></textarea>
+            </div>
+            <div class="form-group">
+              <label for="cfg-objectives">Learning objectives <span class="optional-label">optional</span></label>
+              <textarea id="cfg-objectives" rows="3" placeholder="What should learners understand by the end?"></textarea>
+            </div>
+            <div class="form-group">
+              <label for="cfg-teacher-notes">Teacher notes <span class="optional-label">optional</span></label>
+              <textarea id="cfg-teacher-notes" rows="3" placeholder="Private setup notes for the instructor."></textarea>
+            </div>
+          </section>
+
+          <div class="config-side-column">
+            <section class="form-section capability-card">
+              <div class="card-heading"><span class="card-index">B</span><div><p class="eyebrow">Learner controls</p><h3>Allowed actions</h3></div></div>
+              <p class="section-note">Disable an action to lock the matching simulator affordance during the activity.</p>
+              <label class="capability-row"><span><strong>Move devices</strong><small>Drag micro:bits across the canvas.</small></span><input type="checkbox" id="cap-move-devices"><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Move environment nodes</strong><small>Reposition lights, sound, temperature, and magnets.</small></span><input type="checkbox" id="cap-move-nodes"><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Press buttons</strong><small>Use A, B, and A+B inputs.</small></span><input type="checkbox" id="cap-use-buttons"><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Load code</strong><small>Upload a HEX program in the simulator.</small></span><input type="checkbox" id="cap-load-code"><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Edit code</strong><small>Inspect or edit a device's editable source.</small></span><input type="checkbox" id="cap-edit-code"><span class="toggle-track" aria-hidden="true"></span></label>
+            </section>
+            <section class="form-section scoring-card">
+              <div class="card-heading"><span class="card-index">C</span><div><p class="eyebrow">Gradebook rule</p><h3>Passing threshold</h3></div></div>
+              <div class="threshold-control">
+                <label for="cfg-pass-threshold">Minimum score</label>
+                <div class="threshold-input"><input id="cfg-pass-threshold" type="number" min="0" max="100" step="1"><span>%</span></div>
+              </div>
+              <p class="section-note">The learner passes when earned points reach this percentage of available points.</p>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="tab-scenario" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-scenario">
+        <div class="page-heading page-heading--compact">
+          <p class="eyebrow">Canvas / 02</p>
+          <h2>Build the scene in Swarm.</h2>
+          <p>Capture a .swarm bundle here; code stays inside the simulator, not in this authoring tool.</p>
+        </div>
+        <div class="scenario-toolbar">
+          <div class="connection-status"><span id="scenario-status-dot" class="status-dot"></span><span id="scenario-status">Connecting to simulator…</span></div>
+          <div class="toolbar-actions">
+            <button id="btn-capture-scene" class="btn btn-primary" type="button" disabled>Capture scene</button>
+            <button id="btn-load-scene" class="btn btn-secondary" type="button">Load .swarm file</button>
+            <input id="file-scene" type="file" accept=".swarm,application/octet-stream" hidden>
+            <button id="btn-reload-scene" class="btn btn-secondary" type="button" disabled>Reload into simulator</button>
+          </div>
+        </div>
+        <div class="scenario-layout">
+          <section class="simulator-card">
+            <div class="card-heading"><span class="card-index">SIM</span><div><p class="eyebrow">Author mode</p><h3>Micro:bit swarm canvas</h3></div></div>
+            <iframe id="scenario-iframe" title="Authoring simulator canvas" src="about:blank"></iframe>
+          </section>
+          <section class="scene-card">
+            <div class="card-heading"><span class="card-index">SCENE</span><div><p class="eyebrow">Captured bundle</p><h3>Devices &amp; nodes</h3></div></div>
+            <div id="scene-empty" class="empty-state"><span class="empty-state-mark" aria-hidden="true">＋</span><strong>No scene captured yet</strong><p>Add devices or environment nodes in the simulator, then select Capture scene.</p></div>
+            <div id="scene-table-wrap" class="scene-table-wrap" hidden>
+              <p class="scene-table-note">Use the locks below to set each object's authored starting rules.</p>
+              <div id="scene-table"></div>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="tab-hints" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-hints">
+        <div class="page-heading page-heading--compact">
+          <p class="eyebrow">Scaffolding / 03</p>
+          <h2>Offer a nudge at the right moment.</h2>
+          <p>Hints observe simulation effects, never student source code.</p>
+        </div>
+        <div id="hints-layout" class="editor-layout">
+          <aside id="hint-list-panel" class="list-panel"><div class="panel-title-row"><div><p class="eyebrow">Hint sequence</p><h3>Hints</h3></div><span id="hint-count" class="count-badge">0</span></div><div id="hint-list"></div><button id="btn-add-hint" class="btn btn-secondary btn-add" type="button">+ Add hint</button></aside>
+          <section id="hint-editor-panel" class="detail-panel"><div id="hint-editor-content" class="empty-state"><strong>Select a hint to edit</strong><p>Add a hint to define its trigger, message, and display style.</p></div></section>
+        </div>
+      </section>
+
+      <section id="tab-tests" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-tests">
+        <div class="page-heading page-heading--compact">
+          <p class="eyebrow">Assessment / 04</p>
+          <h2>Grade observable effects.</h2>
+          <p>Each test awards points when its event conditions are met during the current run.</p>
+        </div>
+        <div id="tests-layout" class="editor-layout">
+          <aside id="test-list-panel" class="list-panel"><div class="panel-title-row"><div><p class="eyebrow">Test sequence</p><h3>Graded tests</h3></div><span id="test-count" class="count-badge">0</span></div><div id="test-list"></div><button id="btn-add-test" class="btn btn-secondary btn-add" type="button">+ Add test</button><div id="points-indicator" class="points-indicator"></div></aside>
+          <section id="test-editor-panel" class="detail-panel"><div id="test-editor-content" class="empty-state"><strong>Select a test to edit</strong><p>Add a test and choose the observable behavior that earns its points.</p></div></section>
+        </div>
+      </section>
+
+      <section id="tab-preview" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-preview">
+        <div class="page-heading page-heading--compact">
+          <p class="eyebrow">Learner view / 05</p>
+          <h2>Run the activity before you ship it.</h2>
+          <p>The preview uses the learner-mode simulator and the same effect grader as the exported package.</p>
+        </div>
+        <div class="preview-toolbar"><span id="preview-status" class="connection-status"><span id="preview-status-dot" class="status-dot"></span>Waiting for learner simulator…</span><div class="toolbar-actions"><button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button><button id="btn-check-session" class="btn btn-accent" type="button">Check</button></div></div>
+        <div class="preview-layout">
+          <section class="preview-sim-card"><iframe id="preview-iframe" title="Learner activity preview" src="about:blank"></iframe></section>
+          <aside class="preview-side-column">
+            <section class="preview-panel"><div class="panel-title-row"><div><p class="eyebrow">Observed effects</p><h3>Event log</h3></div><span id="preview-event-count" class="count-badge">0</span></div><ol id="preview-event-log" class="event-log"><li class="event-log-empty">No simulator events yet.</li></ol></section>
+            <section class="preview-panel"><div class="panel-title-row"><div><p class="eyebrow">Evidence check</p><h3>Grading &amp; hints</h3></div><span id="preview-score" class="score-readout">—</span></div><div id="preview-grades" class="grade-list"><p class="empty-note">Run the scene, then select Check.</p></div><div id="preview-hints" class="preview-hints"></div></section>
+          </aside>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  </div>
+  <script defer src="js/app.bundle.js"></script>
+</body>
+</html>

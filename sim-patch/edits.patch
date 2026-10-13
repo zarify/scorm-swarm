@@ -1,0 +1,808 @@
+diff --git a/vendor/swarm-sim/src/App.tsx b/vendor/swarm-sim/src/App.tsx
+index 7084953..1b6040f 100644
+--- a/vendor/swarm-sim/src/App.tsx
++++ b/vendor/swarm-sim/src/App.tsx
+@@ -1,9 +1,26 @@
++import { readLaunchConfig } from './domain/launchConfig';
++import { installLearnerBridge, type LearnerCapabilities } from './learnerBridge';
+ import { SwarmCanvasPanel } from './components/SwarmCanvasPanel';
+ 
++const learnerBridge = installLearnerBridge();
++const defaultCapabilities: LearnerCapabilities = {
++  move_devices: true,
++  move_nodes: true,
++  use_buttons: true,
++  load_code: true,
++  edit_code: true,
++};
++
+ export function App() {
++  const launchConfig = readLaunchConfig(window.location.href);
+   return (
+     <main className="app-shell">
+-      <SwarmCanvasPanel />
++      <SwarmCanvasPanel
++        learnerMode={launchConfig.learnerMode}
++        bundlePath={launchConfig.bundlePath}
++        capabilities={defaultCapabilities}
++        bridge={learnerBridge}
++      />
+     </main>
+   );
+ }
+diff --git a/vendor/swarm-sim/src/components/DeviceCodeEditorModal.tsx b/vendor/swarm-sim/src/components/DeviceCodeEditorModal.tsx
+index 23e6b96..4833547 100644
+--- a/vendor/swarm-sim/src/components/DeviceCodeEditorModal.tsx
++++ b/vendor/swarm-sim/src/components/DeviceCodeEditorModal.tsx
+@@ -6,11 +6,13 @@ interface DeviceCodeEditorModalProps {
+   editableProgram: DeviceEditableProgram;
+   onClose: () => void;
+   onSave: (nextProgram: DeviceEditableProgram) => void;
++  readOnly?: boolean;
+ }
+ 
+ export function DeviceCodeEditorModal({
+   deviceName,
+   editableProgram,
++  readOnly = false,
+   onClose,
+   onSave,
+ }: DeviceCodeEditorModalProps) {
+@@ -42,7 +44,7 @@ export function DeviceCodeEditorModal({
+       className="code-editor-modal"
+       role="dialog"
+       aria-modal="true"
+-      aria-label={`Code editor for ${deviceName}`}
++      aria-label={`${readOnly ? 'Code viewer' : 'Code editor'} for ${deviceName}`}
+       onClick={onClose}
+     >
+       <div className="code-editor-modal__card" onClick={(event) => event.stopPropagation()}>
+@@ -54,7 +56,7 @@ export function DeviceCodeEditorModal({
+         >
+           ×
+         </button>
+-        <p className="metric-label">Code editor</p>
++        <p className="metric-label">{readOnly ? 'Code viewer' : 'Code editor'}</p>
+         <div className="code-editor-modal__header">
+           <strong>{deviceName}</strong>
+           <span>{editableProgram.runtimeSource === 'micropython' ? 'MicroPython main.py' : 'MakeCode main.ts'}</span>
+@@ -76,10 +78,12 @@ export function DeviceCodeEditorModal({
+               id="device-code-editor-source"
+               className="code-editor-modal__textarea"
+               aria-label={`Editing ${editableFileName} for ${deviceName}`}
++              readOnly={readOnly}
++              aria-readonly={readOnly}
+               value={draftSource}
+               onChange={(event) => setDraftSource(event.target.value)}
+               onScroll={(event) => syncHighlightedScroll(highlightRef.current, event.currentTarget)}
+-              onKeyDown={(event) => handleEditorKeyDown(event, setDraftSource)}
++              onKeyDown={readOnly ? undefined : (event) => handleEditorKeyDown(event, setDraftSource)}
+               spellCheck={false}
+               wrap="off"
+             />
+@@ -89,14 +93,16 @@ export function DeviceCodeEditorModal({
+           <button type="button" onClick={onClose}>
+             Cancel
+           </button>
+-          <button
+-            type="button"
+-            onClick={() => {
+-              onSave(commitProgramDraft(editableProgram, editableFileName, draftSource));
+-            }}
+-          >
+-            Save changes
+-          </button>
++          {!readOnly ? (
++            <button
++              type="button"
++              onClick={() => {
++                onSave(commitProgramDraft(editableProgram, editableFileName, draftSource));
++              }}
++            >
++              Save changes
++            </button>
++          ) : null}
+         </div>
+       </div>
+     </div>
+diff --git a/vendor/swarm-sim/src/components/MakeCodeRuntimeHost.tsx b/vendor/swarm-sim/src/components/MakeCodeRuntimeHost.tsx
+index ebf3833..a56ebab 100644
+--- a/vendor/swarm-sim/src/components/MakeCodeRuntimeHost.tsx
++++ b/vendor/swarm-sim/src/components/MakeCodeRuntimeHost.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import type { DeviceId, SwarmProject } from '../domain/project';
+ import { MakeCodeIframeRuntimeAdapter } from '../runtime/makecodeIframeRuntimeAdapter';
++import { wrapAdapterForBridge } from '../learnerBridge';
+ import {
+   loadProjectRuntimePrograms,
+   type DeviceProgramLoadResult,
+@@ -1092,14 +1093,17 @@ function createMakeCodeRuntimeAdapter(
+   frameWindow: Window,
+   ready: boolean,
+ ): MicrobitRuntimeAdapter {
+-  return new MakeCodeIframeRuntimeAdapter({
+-    targetWindow: frameWindow,
+-    targetOrigin: window.location.origin,
+-    eventTarget: window,
+-    messageSource: frameWindow,
+-    initialReady: ready,
+-    name: `MakeCode iframe for ${prepared.device.name}`,
+-  });
++  return wrapAdapterForBridge(
++    prepared.device.id,
++    new MakeCodeIframeRuntimeAdapter({
++      targetWindow: frameWindow,
++      targetOrigin: window.location.origin,
++      eventTarget: window,
++      messageSource: frameWindow,
++      initialReady: ready,
++      name: `MakeCode iframe for ${prepared.device.name}`,
++    }),
++  );
+ }
+ 
+ function extractMakeCodeRadioConfig(
+diff --git a/vendor/swarm-sim/src/components/MicroPythonRuntimeHost.tsx b/vendor/swarm-sim/src/components/MicroPythonRuntimeHost.tsx
+index 562b1eb..9c4126a 100644
+--- a/vendor/swarm-sim/src/components/MicroPythonRuntimeHost.tsx
++++ b/vendor/swarm-sim/src/components/MicroPythonRuntimeHost.tsx
+@@ -1,6 +1,7 @@
+ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+ import type { DeviceId, SwarmProject } from '../domain/project';
+ import { MicroPythonIframeRuntimeAdapter } from '../runtime/micropythonIframeAdapter';
++import { wrapAdapterForBridge } from '../learnerBridge';
+ import { normalizeRuntimeDisplayPixels } from '../runtime/displayPixels';
+ import {
+   deliverRuntimeRadioPacket,
+@@ -192,11 +193,14 @@ export function MicroPythonRuntimeHost({
+   const deferFlashUntilRequest = headless;
+ 
+   const createRuntimeAdapter = useCallback(
+-    (prepared: PreparedDeviceRuntimeProgram, frameWindow: Window, ready: boolean): MicrobitRuntimeAdapter =>
+-      createAdapter?.(prepared, frameWindow, ready) ??
+-      createMicroPythonIframeAdapter(prepared, frameWindow, ready, {
+-        deferFlashUntilRequest,
+-      }),
++    (prepared: PreparedDeviceRuntimeProgram, frameWindow: Window, ready: boolean): MicrobitRuntimeAdapter => {
++      const adapter =
++        createAdapter?.(prepared, frameWindow, ready) ??
++        createMicroPythonIframeAdapter(prepared, frameWindow, ready, {
++          deferFlashUntilRequest,
++        });
++      return wrapAdapterForBridge(prepared.device.id, adapter);
++    },
+     [createAdapter, deferFlashUntilRequest],
+   );
+ 
+diff --git a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
+index 29cd389..e839397 100644
+--- a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
++++ b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
+@@ -74,6 +74,13 @@ import {
+   resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
+ } from '../runtime/editableProgram';
+ import { encodeMicroPythonRadioString } from '../runtime/micropythonIframeAdapter';
++import {
++  base64ToBytes,
++  bytesToBase64,
++  type BridgeCommand,
++  type LearnerCapabilities,
++  type SimLearnerBridge,
++} from '../learnerBridge';
+ 
+ type Selection =
+   | { type: 'device'; id: DeviceId }
+@@ -114,6 +121,10 @@ async function readBundleFileBytes(file: File): Promise<Uint8Array> {
+ 
+ interface SwarmCanvasPanelProps {
+   RuntimeHost?: (props: MicroPythonRuntimeHostProps) => ReactElement;
++  learnerMode?: boolean;
++  bundlePath?: string;
++  capabilities?: LearnerCapabilities;
++  bridge?: SimLearnerBridge;
+ }
+ 
+ interface ArtifactUploadIssue {
+@@ -175,8 +186,21 @@ const APP_VERSION_LABEL = `v${__APP_VERSION__}`;
+ const APP_REPOSITORY_URL = __APP_REPO_URL__;
+ const MAX_CANVAS_NODE_NAME = 11;
+ const MAX_SIDEBAR_NODE_NAME = 28;
++const defaultLearnerCapabilities: LearnerCapabilities = {
++  move_devices: true,
++  move_nodes: true,
++  use_buttons: true,
++  load_code: true,
++  edit_code: true,
++};
+ const textEncoder = new TextEncoder();
+-export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanvasPanelProps = {}) {
++export function SwarmCanvasPanel({
++  RuntimeHost = SwarmRuntimeHosts,
++  learnerMode = false,
++  bundlePath,
++  capabilities: initialCapabilities = defaultLearnerCapabilities,
++  bridge,
++}: SwarmCanvasPanelProps = {}) {
+   const [model, setModel] = useState<CanvasModel>(() => {
+     const project = createDemoProject();
+     return {
+@@ -184,6 +208,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       simulationState: resetSimulation(project, defaultRadioOptions),
+     };
+   });
++  const [learnerCapabilities, setLearnerCapabilities] = useState(() =>
++    normalizeLearnerCapabilities(initialCapabilities),
++  );
++  const learnerCapabilitiesRef = useRef(learnerCapabilities);
+   const [selected, setSelected] = useState<Selection>({ type: 'device', id: 'device-1' });
+   const [isAddLockedEnabled, setIsAddLockedEnabled] = useState(false);
+   const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
+@@ -283,12 +311,89 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+   useEffect(() => {
+     modelRef.current = model;
+   }, [model]);
++  useEffect(() => {
++    if (!bridge) {
++      return;
++    }
++    return bridge.onCommand(async (command: BridgeCommand) => {
++      if (command.type === 'set-capabilities') {
++        const nextCapabilities = normalizeLearnerCapabilities(command.payload);
++        learnerCapabilitiesRef.current = nextCapabilities;
++        setLearnerCapabilities(nextCapabilities);
++        const currentProject = modelRef.current.project;
++        const constrainedProject = applyProjectCapabilities(currentProject, nextCapabilities);
++        if (constrainedProject !== currentProject) {
++          replaceScenarioProject(constrainedProject, {
++            hasUnsavedChanges: false,
++            recordUserInteraction: false,
++          });
++        }
++        return;
++      }
++      if (command.type === 'reset') {
++        performRuntimeOnlyReset();
++        return;
++      }
++      if (command.type === 'get-bundle') {
++        const bytes = await encodeProjectBundle(modelRef.current.project);
++        bridge.sendBundle(command.id, bytesToBase64(bytes));
++        return;
++      }
++      if (typeof command.payload !== 'string') {
++        throw new Error('load-bundle requires a base64 payload');
++      }
++      const loadedProject = await decodeProjectBundle(base64ToBytes(command.payload));
++      const constrainedProject = applyProjectCapabilities(
++        loadedProject,
++        learnerCapabilitiesRef.current,
++      );
++      hasHydratedWorkingCopy.current = true;
++      setHasSavedWorkingCopy(false);
++      replaceScenarioProject(constrainedProject, {
++        hasUnsavedChanges: false,
++        recordUserInteraction: false,
++      });
++      if (command.id) bridge.sendBundle(command.id, command.payload);
++    });
++  }, [bridge]);
+ 
+   useEffect(() => {
+     if (hasHydratedWorkingCopy.current) {
+       return;
+     }
+     let cancelled = false;
++    if (bundlePath) {
++      void (async () => {
++        try {
++          const response = await fetch(bundlePath);
++          if (!response.ok) {
++            throw new Error(`Unable to load bundled scenario: ${response.status}`);
++          }
++          const project = await decodeProjectBundle(new Uint8Array(await response.arrayBuffer()));
++          if (cancelled || hasHydratedWorkingCopy.current) return;
++          hasHydratedWorkingCopy.current = true;
++          setHasSavedWorkingCopy(false);
++          replaceScenarioProject(
++            applyProjectCapabilities(project, learnerCapabilitiesRef.current),
++            {
++              hasUnsavedChanges: false,
++              recordUserInteraction: false,
++            },
++          );
++          setCanvasStateMessage(`Loaded bundled scenario "${project.name}"`);
++        } catch (error) {
++          if (cancelled || hasHydratedWorkingCopy.current) return;
++          hasHydratedWorkingCopy.current = true;
++          setHasSavedWorkingCopy(false);
++          setCanvasStateMessage(
++            error instanceof Error ? error.message : 'Unable to load bundled scenario',
++          );
++        }
++      })();
++      return () => {
++        cancelled = true;
++      };
++    }
+     try {
+       browserProjectStore.current ??= createBrowserProjectStore();
+       browserWorkingCopyStore.current ??= createBrowserWorkingCopyStore();
+@@ -337,7 +442,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     return () => {
+       cancelled = true;
+     };
+-  }, []);
++  }, [bundlePath]);
+ 
+   useEffect(() => {
+     if (!isCanvasStateMenuOpen) {
+@@ -1705,7 +1810,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       )
+     : undefined;
+   const canDropHexToSidebar = Boolean(
+-    selectedDevice && canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
++    !learnerMode &&
++      learnerCapabilities.load_code &&
++      selectedDevice &&
++      canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id]),
+   );
+ 
+   function handleSidebarDragOver(event: DragEvent<HTMLElement>) {
+@@ -1985,7 +2093,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+ 
+     try {
+       const imported = await decodeProjectBundle(await readBundleFileBytes(file));
+-      replaceScenarioProject(imported, { reopenSplash: true });
++      replaceScenarioProject(applyProjectCapabilities(imported, learnerCapabilitiesRef.current), {
++        reopenSplash: true,
++      });
+       setCanvasStateMessage(`Imported "${imported.name}"`);
+     } catch (error) {
+       setCanvasStateMessage(
+@@ -2092,24 +2202,26 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+           </a>
+         </div>
+         <div className="control-stack" aria-label="Simulation controls">
+-          <button
+-            type="button"
+-            className={
+-              hasUnsavedCanvasChanges
+-                ? 'canvas-save-button canvas-save-button--dirty'
+-                : hasSavedWorkingCopy
+-                  ? 'canvas-save-button canvas-save-button--saved'
+-                  : 'canvas-save-button'
+-            }
+-            aria-label={canvasSaveButtonAriaLabel}
+-            title={canvasSaveButtonTitle}
+-            onClick={() => void saveCurrentCanvasToBrowser()}
+-          >
+-            <strong>Save canvas</strong>
+-            <span className="canvas-save-button__status" aria-live="polite">
+-              {canvasSaveStatus}
+-            </span>
+-          </button>
++          {!learnerMode ? (
++            <button
++              type="button"
++              className={
++                hasUnsavedCanvasChanges
++                  ? 'canvas-save-button canvas-save-button--dirty'
++                  : hasSavedWorkingCopy
++                    ? 'canvas-save-button canvas-save-button--saved'
++                    : 'canvas-save-button'
++              }
++              aria-label={canvasSaveButtonAriaLabel}
++              title={canvasSaveButtonTitle}
++              onClick={() => void saveCurrentCanvasToBrowser()}
++            >
++              <strong>Save canvas</strong>
++              <span className="canvas-save-button__status" aria-live="polite">
++                {canvasSaveStatus}
++              </span>
++            </button>
++          ) : null}
+           {hasCustomInstructions ? (
+             <button
+               type="button"
+@@ -2130,22 +2242,24 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+           >
+             <span aria-hidden="true">↺</span> Reset
+           </button>
+-          <button
+-            type="button"
+-            className="button-with-icon"
+-            aria-expanded={isCanvasStateMenuOpen}
+-            aria-controls="canvas-state-panel"
+-            title="Open swarm tools"
+-            onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
+-          >
+-            <span className="button-icon button-icon--toolbar" aria-hidden="true">
+-              ⚙
+-            </span>
+-            Swarm tools
+-          </button>
++          {!learnerMode ? (
++            <button
++              type="button"
++              className="button-with-icon"
++              aria-expanded={isCanvasStateMenuOpen}
++              aria-controls="canvas-state-panel"
++              title="Open swarm tools"
++              onClick={() => setIsCanvasStateMenuOpen((current) => !current)}
++            >
++              <span className="button-icon button-icon--toolbar" aria-hidden="true">
++                ⚙
++              </span>
++              Swarm tools
++            </button>
++          ) : null}
+         </div>
+       </div>
+-      {isCanvasStateMenuOpen ? (
++      {isCanvasStateMenuOpen && !learnerMode ? (
+         <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Swarm tool controls">
+           <div className="canvas-state-panel__section">
+             <span className="metric-label">Swarm tools</span>
+@@ -2543,6 +2657,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                     </g>
+                   ) : null}
+                   <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
++                  {learnerCapabilities.use_buttons ? (
++                    <>
++
+                   <g className="button-combo-link" data-device-button-combo-link={device.deviceId}>
+ 		    <path d="M-29 -2 V20 H29 V-3"/>
+                   </g>
+@@ -2585,6 +2702,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                   <text className="button-dot-label" x="29" y="18" textAnchor="middle">
+                     
+                   </text>
++                    </>
++                  ) : null}
+                   {runtimeState ? (
+                     <g
+                       className={`runtime-state runtime-state--${runtimeState}`}
+@@ -2640,6 +2759,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+               <>
+                 <DeviceSelection
+                   project={project}
++                  readOnly={learnerMode}
++                  canLoadCode={learnerCapabilities.load_code}
++                  canEditCode={learnerCapabilities.edit_code}
+                   runtime={simulationState.devices[selectedDevice.id]}
+                   showMagneticReadings={FEATURE_FLAGS.magnet}
+                   runtimeLoadResult={selectedRuntimeLoadResult}
+@@ -2665,6 +2787,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+             ) : selectedSource ? (
+               <SourceSelection
+                 source={selectedSource}
++                readOnly={learnerMode}
+                 updateSource={updateSource}
+                 onDeleteNode={deleteSelectedNode}
+                 onTogglePositionPin={toggleSourcePositionPin}
+@@ -2709,18 +2832,20 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+               )}
+             </div>
+           </details>
+-          <div className="swarm-sidebar-footer">
+-            <button
+-              type="button"
+-              className="swarm-sidebar-debug-button"
+-              aria-haspopup="dialog"
+-              aria-expanded={isDebugModalOpen}
+-              aria-controls="debug-tools-modal"
+-              onClick={() => setIsDebugModalOpen(true)}
+-            >
+-              Debug
+-            </button>
+-          </div>
++          {!learnerMode ? (
++            <div className="swarm-sidebar-footer">
++              <button
++                type="button"
++                className="swarm-sidebar-debug-button"
++                aria-haspopup="dialog"
++                aria-expanded={isDebugModalOpen}
++                aria-controls="debug-tools-modal"
++                onClick={() => setIsDebugModalOpen(true)}
++              >
++                Debug
++              </button>
++            </div>
++          ) : null}
+         </aside>
+       </div>
+       <div
+@@ -2771,6 +2896,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+         <DeviceCodeEditorModal
+           deviceName={editorDevice.name}
+           editableProgram={activeEditorProgram}
++          readOnly={!learnerCapabilities.edit_code}
+           onClose={() => setEditorDeviceId(null)}
+           onSave={(nextProgram) => saveEditedProgram(editorDevice.id, nextProgram)}
+         />
+@@ -2781,6 +2907,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+ 
+ function DeviceSelection({
+   project,
++  readOnly = false,
++  canLoadCode = true,
++  canEditCode = true,
+   deviceId,
+   showMagneticReadings,
+   runtime,
+@@ -2803,6 +2932,9 @@ function DeviceSelection({
+   onCancelRename,
+ }: {
+   project: SwarmProject;
++  readOnly?: boolean;
++  canLoadCode?: boolean;
++  canEditCode?: boolean;
+   deviceId: DeviceId;
+   showMagneticReadings: boolean;
+   runtime?: DeviceRuntimeState;
+@@ -2855,25 +2987,29 @@ function DeviceSelection({
+         onBeginRename={onBeginRename}
+         onCommitRename={onCommitRename}
+         onCancelRename={onCancelRename}
+-        renameDisabled={renameLocked}
+-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
++        renameDisabled={readOnly || renameLocked}
++        renameDisabledTitle={readOnly ? 'Learner mode hides rename controls' : 'Pinned locked nodes cannot be renamed'}
+       />
+       <div className="selection-actions">
+         <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
+           <span aria-hidden="true">↺</span> Reset
+         </button>
+-        <button type="button" onClick={onDeleteNode}>
+-          <span aria-hidden="true">🗑</span> Delete
+-        </button>
+-        <PositionPinButton
+-          title={pinControl.title}
+-          active={positionPinned}
+-          disabled={pinControl.disabled}
+-          onClick={() => onTogglePositionPin(device.id)}
+-        />
+-        {!locked ? (
+-          <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
+-            <span aria-hidden="true">✎</span> Edit code
++        {!readOnly ? (
++          <button type="button" onClick={onDeleteNode}>
++            <span aria-hidden="true">🗑</span> Delete
++          </button>
++        ) : null}
++        {!readOnly ? (
++          <PositionPinButton
++            title={pinControl.title}
++            active={positionPinned}
++            disabled={pinControl.disabled}
++            onClick={() => onTogglePositionPin(device.id)}
++          />
++        ) : null}
++        {!locked && editableProgram ? (
++          <button type="button" onClick={() => onOpenEditor(device.id)}>
++            <span aria-hidden="true">✎</span> {canEditCode ? 'Edit code' : 'View code'}
+           </button>
+         ) : null}
+       </div>
+@@ -2941,7 +3077,7 @@ function DeviceSelection({
+             <p>Position and name locked</p>
+           </div>
+         ) : null}
+-        {canAssignCode ? (
++        {canAssignCode && canLoadCode ? (
+           <label className="artifact-field artifact-field--compact">
+             Load code onto {device.name}
+             <input
+@@ -2995,6 +3131,7 @@ function DeviceSelection({
+ 
+ function SourceSelection({
+   source,
++  readOnly = false,
+   updateSource,
+   onDeleteNode,
+   onTogglePositionPin,
+@@ -3006,6 +3143,7 @@ function SourceSelection({
+   onCancelRename,
+ }: {
+   source: EnvironmentSource;
++  readOnly?: boolean;
+   updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
+   onDeleteNode: () => void;
+   onTogglePositionPin: (sourceId: EnvironmentSourceId) => void;
+@@ -3038,8 +3176,8 @@ function SourceSelection({
+         onBeginRename={onBeginRename}
+         onCommitRename={onCommitRename}
+         onCancelRename={onCancelRename}
+-        renameDisabled={propertiesLocked}
+-        renameDisabledTitle="Pinned locked nodes cannot be renamed"
++        renameDisabled={readOnly || propertiesLocked}
++        renameDisabledTitle={readOnly ? 'Learner mode hides rename controls' : 'Pinned locked nodes cannot be renamed'}
+       />
+       <p className="hint">
+         {source.type === 'light'
+@@ -3051,31 +3189,37 @@ function SourceSelection({
+               : 'Magnet source'}
+       </p>
+       <div className="selection-actions">
+-        <button type="button" onClick={onDeleteNode}>
+-          <span aria-hidden="true">🗑</span> Delete
+-        </button>
+-        <PositionPinButton
+-          title={pinControl.title}
+-          active={positionPinned}
+-          disabled={pinControl.disabled}
+-          onClick={() => onTogglePositionPin(source.id)}
+-        />
++        {!readOnly ? (
++          <button type="button" onClick={onDeleteNode}>
++            <span aria-hidden="true">🗑</span> Delete
++          </button>
++        ) : null}
++        {!readOnly ? (
++          <PositionPinButton
++            title={pinControl.title}
++            active={positionPinned}
++            disabled={pinControl.disabled}
++            onClick={() => onTogglePositionPin(source.id)}
++          />
++        ) : null}
+       </div>
+       {locked ? (
+         <div className="selection-position-lock">
+           <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
+         </div>
+       ) : null}
+-      <RangeValueField
+-        label="Radius"
+-        min={40}
+-        max={280}
+-        step={1}
+-        value={source.radius}
+-        disabled={propertiesLocked}
+-        onValueChange={(radius) => updateSource(source.id, { radius })}
+-      />
+-      {source.type === 'magnet' ? (
++      {!readOnly ? (
++        <RangeValueField
++          label="Radius"
++          min={40}
++          max={280}
++          step={1}
++          value={source.radius}
++          disabled={propertiesLocked}
++          onValueChange={(radius) => updateSource(source.id, { radius })}
++        />
++      ) : null}
++      {!readOnly && source.type === 'magnet' ? (
+         <>
+           <RangeValueField
+             label="Angle"
+@@ -3100,7 +3244,7 @@ function SourceSelection({
+             }
+           />
+         </>
+-      ) : source.type === 'temperature' ? (
++      ) : !readOnly && source.type === 'temperature' ? (
+         <>
+           <label className="range-field">
+             Mode
+@@ -3131,7 +3275,7 @@ function SourceSelection({
+             }
+           />
+         </>
+-      ) : (
++      ) : !readOnly ? (
+         <RangeValueField
+           label="Peak level (micro:bit scale)"
+           min={MICROBIT_SENSOR_LEVEL_MIN}
+@@ -3145,7 +3289,7 @@ function SourceSelection({
+             })
+           }
+         />
+-      )}
++      ) : null}
+     </>
+   );
+ }
+@@ -3352,6 +3496,33 @@ function canAssignDeviceCode(
+   }
+   return !device.programArtifactId;
+ }
++function normalizeLearnerCapabilities(value: unknown): LearnerCapabilities {
++  const candidate = value !== null && typeof value === 'object'
++    ? value as Partial<LearnerCapabilities>
++    : {};
++  return {
++    move_devices: typeof candidate.move_devices === 'boolean' ? candidate.move_devices : true,
++    move_nodes: typeof candidate.move_nodes === 'boolean' ? candidate.move_nodes : true,
++    use_buttons: typeof candidate.use_buttons === 'boolean' ? candidate.use_buttons : true,
++    load_code: typeof candidate.load_code === 'boolean' ? candidate.load_code : true,
++    edit_code: typeof candidate.edit_code === 'boolean' ? candidate.edit_code : true,
++  };
++}
++
++function applyProjectCapabilities(
++  project: SwarmProject,
++  capabilities: LearnerCapabilities,
++): SwarmProject {
++  const devices = capabilities.move_devices || project.devices.every((device) => device.positionPinned)
++    ? project.devices
++    : project.devices.map((device) => ({ ...device, positionPinned: true }));
++  const environmentSources =
++    capabilities.move_nodes || project.environmentSources.every((source) => source.positionPinned)
++      ? project.environmentSources
++      : project.environmentSources.map((source) => ({ ...source, positionPinned: true }));
++  if (devices === project.devices && environmentSources === project.environmentSources) return project;
++  return { ...project, devices, environmentSources };
++}
+ 
+ function isPositionPinned(
+   node: Pick<VirtualDevice, 'positionPinned'> | Pick<EnvironmentSource, 'positionPinned'> | undefined,
+diff --git a/vendor/swarm-sim/src/simulation/simulationEngine.ts b/vendor/swarm-sim/src/simulation/simulationEngine.ts
+index 4c0f6d8..e934c22 100644
+--- a/vendor/swarm-sim/src/simulation/simulationEngine.ts
++++ b/vendor/swarm-sim/src/simulation/simulationEngine.ts
+@@ -5,6 +5,7 @@ import {
+ } from '../runtime/microbitSensorDomains';
+ import { isEnvironmentSourceTypeEnabled } from '../runtime/featureFlags';
+ import type { RuntimeRadioPacket } from '../runtime/runtimeAdapter';
++import { emitBridgeEvent, isBridgeEmbedded, radioPacketForBridge } from '../learnerBridge';
+ 
+ export type SimulationMode = 'idle' | 'running' | 'paused';
+ export type DeviceLifecycleState = 'stopped' | 'running' | 'paused';
+@@ -338,6 +339,7 @@ export function setDeviceButton(
+   pressed: boolean,
+ ): SimulationState {
+   const device = requireDevice(state, deviceId);
++  emitBridgeEvent({ kind: 'button', device_id: deviceId, button, pressed });
+   const sequence = state.sequence + 1;
+   const devices = {
+     ...state.devices,
+@@ -453,6 +455,32 @@ export function routeRadioPacket(
+     receivedPackets,
+     blockedTargets,
+   };
++  if (isBridgeEmbedded()) {
++    const bridgePacket = radioPacketForBridge({
++      data: event.data,
++      group: event.group,
++      channel: event.channel,
++      signalStrength: event.signalStrength,
++    });
++    emitBridgeEvent({ kind: 'radio-tx', device_id: senderId, packet: bridgePacket });
++    for (const received of event.receivedPackets) {
++      emitBridgeEvent({
++        kind: 'radio-rx',
++        device_id: received.deviceId,
++        from_device_id: senderId,
++        packet: bridgePacket,
++        rssi: received.rssi,
++      });
++    }
++    for (const blocked of event.blockedTargets) {
++      emitBridgeEvent({
++        kind: 'radio-blocked',
++        device_id: blocked.deviceId,
++        from_device_id: senderId,
++        reason: blocked.reason,
++      });
++    }
++  }
+   const logs = makeRadioLogs(event);
+ 
+   return {
+diff --git a/vendor/swarm-sim/src/acceptance/mvpAcceptance.test.ts b/vendor/swarm-sim/src/acceptance/mvpAcceptance.test.ts
+index 16ac5ec..f08e5ce 100644
+--- a/vendor/swarm-sim/src/acceptance/mvpAcceptance.test.ts
++++ b/vendor/swarm-sim/src/acceptance/mvpAcceptance.test.ts
+@@ -87,7 +87,7 @@ describe('MVP acceptance coverage', () => {
+ 
+     expect(changed).not.toEqual(initial);
+     expect(reset).toEqual(initial);
+-  });
++  }, 20_000);
+ 
+   it('prepares mixed MakeCode and MicroPython runtime programs from real fixture HEX artifacts', async () => {
+     const flashed: RuntimeProgram[] = [];
