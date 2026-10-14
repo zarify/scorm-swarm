@@ -6,63 +6,108 @@ function envelope(seq, ts, event) {
   return { seq, ts, event };
 }
 
-test('serial conditions match contains, exact, and regular expressions', () => {
-  const grader = createGrader({
-    testCases: [
-      { id: 'contains', conditions: { type: 'serial_output', device_id: 'alice', match: 'contains', value: 'HELLO', case_sensitive: false } },
-      { id: 'regex', conditions: { type: 'serial_output', device_id: null, match: 'regex', value: '^hello [0-9]+$' } },
-      { id: 'exact', conditions: { type: 'serial_output', device_id: 'bob', match: 'exact', value: 'ready' } },
-    ],
-  });
-  grader.record(envelope(1, 1000, { kind: 'serial', device_id: 'alice', text: 'hello 42' }));
-  grader.record(envelope(2, 1001, { kind: 'serial', device_id: 'bob', text: 'ready' }));
-  assert.deepEqual(grader.grade().map(({ id, passed }) => [id, passed]), [
-    ['contains', true], ['regex', true], ['exact', true],
-  ]);
-});
+const HAPPY_FRAME = [
+  0, 0, 0, 0, 0,
+  0, 9, 0, 9, 0,
+  0, 0, 0, 0, 0,
+  9, 0, 0, 0, 9,
+  0, 9, 9, 9, 0,
+];
+const HAPPY_LAYOUT = '.....\n.#.#.\n.....\n#...#\n.###.';
 
-test('button AB presses count, while identical transitions inside 150 ms are deduplicated', () => {
-  const grader = createGrader({ testCases: [{
-    id: 'both',
-    conditions: { type: 'button_press', device_id: 'alice', button: 'AB', min_count: 2 },
-  }] });
-  assert.equal(grader.record(envelope(1, 1000, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), true);
-  assert.equal(grader.record(envelope(2, 1100, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), false);
-  assert.equal(grader.record(envelope(3, 1150, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), true);
-  assert.equal(grader.grade()[0].passed, true);
+test('serial conditions match contains, exact, and regular expressions', () => {
+  const events = [
+    envelope(1, 1000, { kind: 'serial', device_id: 'alice', text: 'hello 42' }),
+    envelope(2, 1001, { kind: 'serial', device_id: 'bob', text: 'ready' }),
+  ];
+  assert.equal(evaluateCondition({ type: 'serial_output', device_id: 'alice', match: 'contains', value: 'HELLO', case_sensitive: false }, events).passed, true);
+  assert.equal(evaluateCondition({ type: 'serial_output', device_id: null, match: 'regex', value: '^hello [0-9]+$' }, events).passed, true);
+  assert.equal(evaluateCondition({ type: 'serial_output', device_id: 'bob', match: 'exact', value: 'ready' }, events).passed, true);
+  assert.equal(evaluateCondition({ type: 'serial_output', device_id: 'bob', match: 'exact', value: 'ready' }, events, 1001).matchCount, 1);
 });
 
 test('radio reception filters sender, channel, group, RSSI, and raw payload hex', () => {
-  const grader = createGrader({ testCases: [
-    { id: 'match', conditions: { type: 'radio_rx', device_id: 'bob', from_device_id: 'alice', channel: 7, group: 42, payload: { match: 'hex', value: '4869' }, rssi_min: -60, rssi_max: -30 } },
-    { id: 'wrong-channel', conditions: { type: 'radio_rx', device_id: null, channel: 8 } },
-    { id: 'weak', conditions: { type: 'radio_rx', device_id: null, rssi_min: -30 } },
-    { id: 'wrong-payload', conditions: { type: 'radio_rx', device_id: null, payload: { match: 'hex', value: '6e6f' } } },
-  ] });
-  grader.record(envelope(1, 1000, {
+  const events = [envelope(1, 1000, {
     kind: 'radio-rx',
     device_id: 'bob',
     from_device_id: 'alice',
     packet: { data_b64: Buffer.from('Hi').toString('base64'), group: 42, channel: 7, signal_strength: null },
     rssi: -42,
-  }));
-  assert.deepEqual(grader.grade().map(({ passed }) => passed), [true, false, false, false]);
+  })];
+  assert.equal(evaluateCondition({ type: 'radio_rx', device_id: 'bob', from_device_id: 'alice', channel: 7, group: 42, payload: { match: 'hex', value: '4869' }, rssi_min: -60, rssi_max: -30 }, events).passed, true);
+  assert.equal(evaluateCondition({ type: 'radio_rx', device_id: null, channel: 8 }, events).passed, false);
+  assert.equal(evaluateCondition({ type: 'radio_rx', device_id: null, rssi_min: -30 }, events).passed, false);
+  assert.equal(evaluateCondition({ type: 'radio_rx', device_id: null, payload: { match: 'hex', value: '6e6f' } }, events).passed, false);
 });
 
-test('sensor readings require a continuously held in-range value and latches after passing', (t) => {
+test('button AB presses count, while identical transitions inside 150 ms are deduplicated', () => {
+  const grader = createGrader();
+  assert.equal(grader.record(envelope(1, 1000, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), true);
+  assert.equal(grader.record(envelope(2, 1100, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), false);
+  assert.equal(grader.record(envelope(3, 1150, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), true);
+  assert.equal(
+    grader.evaluate({ type: 'button_press', device_id: 'alice', button: 'AB', min_count: 2 }, 1150).passed,
+    true,
+  );
+});
+
+test('sensor readings require a continuously held in-range value', (t) => {
   let now = 10000;
   t.mock.method(Date, 'now', () => now);
   const condition = { type: 'sensor_reading', device_id: 'alice', sensor: 'lightLevel', min: 40, max: 60, min_duration_seconds: 2 };
-  const grader = createGrader({ testCases: [{ id: 'held', conditions: condition }] });
+  const grader = createGrader();
   grader.record(envelope(1, now, { kind: 'sensor', device_id: 'alice', sensor: 'lightLevel', value: 50 }));
   now = 11999;
-  assert.equal(grader.grade()[0].passed, false);
+  assert.equal(grader.evaluate(condition).passed, false);
   now = 12000;
-  assert.equal(grader.grade()[0].passed, true);
-  now = 12100;
+  assert.equal(grader.evaluate(condition).passed, true);
   grader.record(envelope(2, now, { kind: 'sensor', device_id: 'alice', sensor: 'lightLevel', value: 20 }));
-  assert.equal(grader.evaluate(condition, now).passed, false);
-  assert.equal(grader.grade()[0].passed, true);
+  assert.equal(grader.evaluate(condition).passed, false);
+});
+
+test('led_display matches the latest display frame as lit/unlit cells', () => {
+  const grader = createGrader();
+  grader.record(envelope(1, 1000, { kind: 'display', device_id: 'alice', pixels: HAPPY_FRAME }));
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT }, 1000).passed, true);
+  // #/1 both mean lit, ./0 both mean unlit.
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: '00000\n01010\n00000\n10001\n01110' }, 1000).passed, true);
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT.split('\n').reverse().join('\n') }, 1000).passed, false);
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'bob', layout: HAPPY_LAYOUT }, 1000).passed, false);
+  // Latest frame wins.
+  grader.record(envelope(2, 1100, { kind: 'display', device_id: 'alice', pixels: new Array(25).fill(0) }));
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT }, 1100).passed, false);
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: '.....\n.....\n.....\n.....\n.....' }, 1100).passed, true);
+  grader.reset();
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: '.....\n.....\n.....\n.....\n.....' }, 1100).passed, false);
+});
+
+test('led_display ignores zero-value pixels and short frames', () => {
+  const events = [
+    envelope(1, 1000, { kind: 'display', device_id: 'alice', pixels: HAPPY_FRAME.map((value) => (value > 0 ? 0 : value)) }),
+    envelope(2, 1000, { kind: 'display', device_id: 'bob', pixels: [1, 0, 1] }),
+  ];
+  assert.equal(evaluateCondition({ type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT }, events).passed, false);
+  assert.equal(evaluateCondition({ type: 'led_display', device_id: 'bob', layout: '###' }, events).passed, false);
+  assert.equal(evaluateCondition({ type: 'led_display', device_id: 'alice', layout: '...' }, events).passed, false);
+});
+
+test('since windows filter event counts but not sensor or display state', () => {
+  const events = [
+    envelope(1, 1000, { kind: 'serial', device_id: 'alice', text: 'tick' }),
+    envelope(2, 1500, { kind: 'serial', device_id: 'alice', text: 'tick' }),
+    envelope(3, 1500, { kind: 'sensor', device_id: 'alice', sensor: 'lightLevel', value: 50 }),
+    envelope(4, 1500, { kind: 'display', device_id: 'alice', pixels: HAPPY_FRAME }),
+  ];
+  const serial = { type: 'serial_output', device_id: 'alice', match: 'contains', value: 'tick', min_count: 2 };
+  assert.equal(evaluateCondition(serial, events, 1600).matchCount, 2);
+  assert.equal(evaluateCondition(serial, events, 1600, { since: 1200 }).matchCount, 1);
+  assert.equal(evaluateCondition(serial, events, 1600, { since: 1500 }).matchCount, 1);
+  assert.equal(evaluateCondition(serial, events, 1600, { since: 1600 }).passed, false);
+  // State conditions use the latest state regardless of since.
+  const sensor = { type: 'sensor_reading', device_id: 'alice', sensor: 'lightLevel', min: 40, max: 60 };
+  assert.equal(evaluateCondition(sensor, events, 1600, { since: 1600 }).passed, true);
+  const display = { type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT };
+  assert.equal(evaluateCondition(display, events, 1600, { since: 1600 }).passed, true);
 });
 
 test('composites use all/any and none means no child condition is satisfied', () => {
@@ -77,19 +122,18 @@ test('composites use all/any and none means no child condition is satisfied', ()
   assert.equal(evaluateCondition({ type: 'all', conditions: none.conditions }, events).passed, false);
 });
 
-test('min_count reports evidence count; reset and code-load clear the latch', () => {
-  const grader = createGrader({ testCases: [{
-    id: 'three',
-    conditions: { type: 'serial_output', device_id: null, match: 'contains', value: 'tick', min_count: 3 },
-  }] });
+test('min_count reports evidence count and code-load/reset clear the grader state', () => {
+  const grader = createGrader();
+  const condition = { type: 'serial_output', device_id: null, match: 'contains', value: 'tick', min_count: 3 };
   grader.record(envelope(1, 1000, { kind: 'serial', device_id: 'alice', text: 'tick 1' }));
   grader.record(envelope(2, 1001, { kind: 'serial', device_id: 'bob', text: 'tick 2' }));
-  assert.deepEqual(grader.grade()[0], { id: 'three', passed: false, matchCount: 2 });
+  assert.deepEqual(grader.evaluate(condition, 1001), { passed: false, matchCount: 2 });
   grader.record(envelope(3, 1002, { kind: 'serial', device_id: 'alice', text: 'tick 3' }));
-  assert.equal(grader.grade()[0].passed, true);
+  assert.equal(grader.evaluate(condition, 1002).passed, true);
   grader.record(envelope(4, 1003, { kind: 'code-load', device_id: 'alice' }));
-  assert.deepEqual(grader.grade()[0], { id: 'three', passed: false, matchCount: 0 });
+  assert.deepEqual(grader.evaluate(condition, 1003), { passed: false, matchCount: 0 });
   grader.record(envelope(5, 1004, { kind: 'serial', device_id: 'alice', text: 'tick 4' }));
+  assert.equal(grader.evaluate(condition, 1004).matchCount, 1);
   grader.reset();
-  assert.deepEqual(grader.grade()[0], { id: 'three', passed: false, matchCount: 0 });
+  assert.deepEqual(grader.evaluate(condition, 1004), { passed: false, matchCount: 0 });
 });

@@ -1,4 +1,5 @@
 import { VALID_CONDITION_TYPES } from '../../shared/config-validator.js';
+import { appendCheckbox, appendNumber, appendSelect, appendText, makeButton, makeField } from './form-fields.js';
 
 const CONDITION_LABELS = {
   all: 'All conditions',
@@ -9,6 +10,7 @@ const CONDITION_LABELS = {
   radio_tx: 'Radio transmission',
   radio_rx: 'Radio reception',
   sensor_reading: 'Sensor reading',
+  led_display: 'LED display',
 };
 
 const SENSOR_LABELS = {
@@ -42,6 +44,8 @@ export function createDefaultCondition(type = 'serial_output') {
       };
     case 'sensor_reading':
       return { type, device_id: null, sensor: 'lightLevel', min: null, max: null, min_duration_seconds: 0 };
+    case 'led_display':
+      return { type, device_id: null, layout: '.....\n.....\n.....\n.....\n.....' };
     case 'serial_output':
     default:
       return {
@@ -252,6 +256,21 @@ function renderLeafFields(condition, onChange, scene) {
       appendNumber(fields, 'Held for seconds', condition.min_duration_seconds ?? 0,
         (value) => update(condition, 'min_duration_seconds', value, onChange), { minimum: 0, step: 'any' });
       break;
+    case 'led_display': {
+      const layoutField = makeField('Layout', true);
+      const textarea = document.createElement('textarea');
+      textarea.className = 'mono';
+      textarea.rows = 5;
+      textarea.spellcheck = false;
+      textarea.value = condition.layout ?? '';
+      textarea.addEventListener('change', () => update(condition, 'layout', textarea.value, onChange));
+      const help = document.createElement('small');
+      help.className = 'field-help';
+      help.textContent = 'Five rows of five characters: # or 1 = lit, . or 0 = unlit.';
+      layoutField.append(textarea, help);
+      fields.append(layoutField);
+      break;
+    }
   }
   return fields;
 }
@@ -281,83 +300,6 @@ function appendDeviceSelect(fields, label, selected, scene, onChange) {
   ], (value) => onChange(value === '' ? null : value));
 }
 
-function appendSelect(fields, labelText, selected, options, onChange) {
-  const field = makeField(labelText);
-  const select = document.createElement('select');
-  for (const [value, text] of options) {
-    const option = document.createElement('option');
-    option.value = value;
-    option.textContent = text;
-    option.selected = selected === value;
-    select.append(option);
-  }
-  select.addEventListener('change', () => onChange(select.value));
-  field.append(select);
-  fields.append(field);
-}
-
-function appendText(fields, labelText, value, onChange, wide = false) {
-  const field = makeField(labelText, wide);
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.value = value ?? '';
-  input.addEventListener('change', () => onChange(input.value));
-  field.append(input);
-  fields.append(field);
-}
-
-function appendNumber(fields, labelText, value, onChange, { integer = false, nullable = false, minimum, step } = {}) {
-  const field = makeField(labelText);
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.step = step ?? (integer ? '1' : 'any');
-  if (minimum !== undefined) input.min = String(minimum);
-  input.value = value == null ? '' : String(value);
-  input.placeholder = nullable ? 'Any' : '';
-  input.addEventListener('change', () => {
-    if (input.value === '') onChange(nullable ? null : Number.NaN);
-    else onChange(Number(input.value));
-  });
-  field.append(input);
-  fields.append(field);
-}
-
-function appendCheckbox(fields, labelText, checked, onChange) {
-  const field = makeField(labelText);
-  field.classList.add('condition-checkbox-field');
-  const label = document.createElement('label');
-  label.className = 'inline-toggle';
-  const input = document.createElement('input');
-  input.type = 'checkbox';
-  input.checked = checked;
-  input.addEventListener('change', () => onChange(input.checked));
-  const text = document.createElement('span');
-  text.textContent = labelText;
-  label.append(input, text);
-  field.replaceChildren(label);
-  fields.append(field);
-}
-
-function makeField(labelText, wide = false) {
-  const field = document.createElement('div');
-  field.className = wide ? 'condition-field condition-field--wide' : 'condition-field';
-  const label = document.createElement('label');
-  label.textContent = labelText;
-  field.append(label);
-  return field;
-}
-
-function makeButton(text, label, disabled, onClick) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'condition-order-button';
-  button.textContent = text;
-  button.setAttribute('aria-label', label);
-  button.disabled = disabled;
-  button.addEventListener('click', onClick);
-  return button;
-}
-
 function update(condition, key, value, onChange) {
   onChange({ ...condition, [key]: value });
 }
@@ -370,5 +312,6 @@ function conditionSummary(condition) {
   if (condition.type === 'serial_output') return condition.value || 'Serial text';
   if (condition.type === 'button_press') return condition.button ?? 'any button';
   if (condition.type === 'sensor_reading') return SENSOR_LABELS[condition.sensor] ?? 'Sensor';
+  if (condition.type === 'led_display') return 'LED layout';
   return condition.type === 'radio_rx' ? 'Received packet' : 'Transmitted packet';
 }

@@ -20,20 +20,27 @@ const state = {
       teacher_notes_markdown: '',
     },
     evaluation: {
-      pass_threshold: 50,
       test_cases: [
         {
           id: 'test-1',
-          type: 'effect',
           points: 1,
-          conditions: {
-            type: 'serial_output',
-            device_id: null,
-            match: 'contains',
-            value: 'hello',
-            case_sensitive: true,
-            min_count: 1,
-          },
+          trigger: [
+            { type: 'press_button', device_id: null, button: 'A', count: 1, interval_ms: 0 },
+          ],
+          steps: [
+            {
+              type: 'check',
+              condition: {
+                type: 'serial_output',
+                device_id: null,
+                match: 'contains',
+                value: 'hello',
+                case_sensitive: true,
+                min_count: 1,
+              },
+              timeout_seconds: 5,
+            },
+          ],
         },
       ],
     },

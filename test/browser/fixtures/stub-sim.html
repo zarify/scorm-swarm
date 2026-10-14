@@ -14,14 +14,25 @@
 <body>
   <main id="simulator" aria-label="Stub learner simulator">
     <p id="simulator-status">Stub simulator waiting for activity settings.</p>
+    <label><input id="stub-mode" type="checkbox" checked> Emit serial output for injected Alice A presses</label>
     <button id="button-a" type="button">Press Alice A</button>
   </main>
   <script>
     (() => {
       const source = 'swarm-sim-bridge';
       const pendingScene = 'U1dBUk0CAHsidHlwZSI6InN0dWIifQ==';
+      const happyFrame = [
+        0, 0, 0, 0, 0,
+        0, 9, 0, 9, 0,
+        0, 0, 0, 0, 0,
+        9, 0, 0, 0, 9,
+        0, 9, 9, 9, 0,
+      ];
       let sequence = 0;
       let capabilities = {};
+      let uiVisibility = {};
+      let currentBundle = pendingScene;
+      let currentDisplay = new Array(25).fill(0);
       let replayed = false;
 
       function send(type, payload, id) {
@@ -39,29 +50,72 @@
         send('event', { seq: sequence, ts: Date.now(), event });
       }
 
+      function emitRadioReception(fromDeviceId, packet) {
+        emit({ kind: 'radio-rx', device_id: 'bob', from_device_id: fromDeviceId, packet, rssi: -42 });
+      }
+
+      function receiveButton({ device_id, button }) {
+        if (device_id !== 'alice' || button !== 'A') return;
+        setTimeout(() => {
+          if (document.getElementById('stub-mode').checked) {
+            emit({ kind: 'serial', device_id: 'alice', text: 'button a' });
+          }
+          currentDisplay = happyFrame.slice();
+          emit({ kind: 'display', device_id: 'alice', pixels: currentDisplay.slice() });
+          emitRadioReception('alice', {
+            data_b64: 'cGluZw==', group: 42, channel: 7, signal_strength: null,
+          });
+          emit({ kind: 'button', device_id: 'alice', button: 'A', pressed: true });
+        }, 30);
+      }
+
       window.addEventListener('message', (messageEvent) => {
         if (messageEvent.source !== window.parent || messageEvent.origin !== location.origin) return;
         const message = messageEvent.data;
         if (!message || message.source !== 'swarm-scorm' || message.v !== 1) return;
+        const payload = message.payload || {};
         if (message.type === 'set-capabilities') {
-          capabilities = message.payload || {};
+          capabilities = payload;
           document.getElementById('button-a').hidden = capabilities.use_buttons === false;
           document.getElementById('simulator-status').textContent = 'Stub simulator ready in learner mode.';
           if (!replayed) {
             replayed = true;
             setTimeout(() => emit({ kind: 'serial', device_id: 'alice', text: 'hello 42' }), 40);
-            setTimeout(() => emit({
-              kind: 'radio-rx',
-              device_id: 'bob',
-              from_device_id: 'alice',
-              packet: { data_b64: 'cGluZw==', group: 42, channel: 7, signal_strength: null },
-              rssi: -42,
+            setTimeout(() => emitRadioReception('alice', {
+              data_b64: 'cGluZw==', group: 42, channel: 7, signal_strength: null,
             }), 80);
           }
+        } else if (message.type === 'set-ui-visibility') {
+          uiVisibility = payload;
+          const enabled = Object.entries(uiVisibility)
+            .filter(([, visible]) => visible === true)
+            .map(([key]) => key);
+          document.getElementById('simulator-status').textContent = `panels: ${enabled.join(',')}`;
+        } else if (message.type === 'press-button') {
+          receiveButton(payload);
+        } else if (message.type === 'radio-broadcast') {
+          const packet = {
+            data_b64: payload.payload_b64,
+            group: payload.group,
+            channel: payload.channel,
+            signal_strength: null,
+          };
+          emit({ kind: 'radio-tx', device_id: payload.device_id, packet });
+          emitRadioReception(payload.device_id, packet);
+        } else if (message.type === 'set-node-level') {
+          document.getElementById('simulator-status').textContent = `node ${payload.node_id} level ${payload.value}`;
+        } else if (message.type === 'add-node') {
+          document.getElementById('simulator-status').textContent = `added ${payload.node_type} at ${payload.x},${payload.y}`;
+        } else if (message.type === 'get-display') {
+          send('display', { displays: { alice: currentDisplay.slice() } }, message.id);
         } else if (message.type === 'get-bundle') {
-          send('bundle', pendingScene, message.id);
+          send('bundle', currentBundle, message.id);
         } else if (message.type === 'load-bundle') {
-          send('bundle', message.payload, message.id);
+          currentBundle = message.payload;
+          send('bundle', currentBundle, message.id);
+          document.getElementById('simulator-status').textContent =
+            `bundle loaded: ${String(currentBundle).length} chars`;
+          emit({ kind: 'code-load', device_id: 'alice' });
         } else if (message.type === 'reset') {
           document.getElementById('simulator-status').textContent = 'Stub simulator session reset.';
         }

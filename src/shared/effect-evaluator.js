@@ -1,16 +1,16 @@
 const textDecoder = new TextDecoder('utf-8');
 
-export function createGrader({ testCases = [] } = {}) {
+export function createGrader() {
   let eventLog = [];
   let latestSensors = new Map();
+  let latestDisplays = new Map();
   let recentButtons = new Map();
-  let latchedTestCounts = new Map();
 
   function reset() {
     eventLog = [];
     latestSensors = new Map();
+    latestDisplays = new Map();
     recentButtons = new Map();
-    latchedTestCounts = new Map();
   }
 
   function record(message) {
@@ -36,35 +36,27 @@ export function createGrader({ testCases = [] } = {}) {
         ts: entry.ts,
       });
     }
+    if (entry.event.kind === 'display') {
+      latestDisplays.set(entry.event.device_id, {
+        device_id: entry.event.device_id,
+        pixels: Array.isArray(entry.event.pixels) ? entry.event.pixels : [],
+        ts: entry.ts,
+      });
+    }
     return true;
   }
 
   function evaluate(condition, now = Date.now()) {
-    return evaluateConditionState(condition, eventLog, latestSensors, now);
+    return evaluateConditionState(condition, eventLog, latestSensors, latestDisplays, now, -Infinity);
   }
 
-  function grade() {
-    const now = Date.now();
-    return testCases.map((testCase) => {
-      const current = evaluateConditionState(testCase.conditions, eventLog, latestSensors, now);
-      if (current.passed && !latchedTestCounts.has(testCase.id)) {
-        latchedTestCounts.set(testCase.id, current.matchCount);
-      }
-      const latchedCount = latchedTestCounts.get(testCase.id);
-      return {
-        id: testCase.id,
-        passed: latchedCount !== undefined,
-        matchCount: latchedCount ?? current.matchCount,
-      };
-    });
-  }
-
-  return { record, grade, reset, evaluate };
+  return { record, evaluate, reset };
 }
 
-export function evaluateCondition(condition, events, now = Date.now()) {
+export function evaluateCondition(condition, events, now = Date.now(), { since = -Infinity } = {}) {
   const eventLog = [];
   const latestSensors = new Map();
+  const latestDisplays = new Map();
   for (const message of events ?? []) {
     const entry = normalizeEvent(message);
     if (!entry) continue;
@@ -77,16 +69,23 @@ export function evaluateCondition(condition, events, now = Date.now()) {
         ts: entry.ts,
       });
     }
+    if (entry.event.kind === 'display') {
+      latestDisplays.set(entry.event.device_id, {
+        device_id: entry.event.device_id,
+        pixels: Array.isArray(entry.event.pixels) ? entry.event.pixels : [],
+        ts: entry.ts,
+      });
+    }
   }
-  return evaluateConditionState(condition, eventLog, latestSensors, now);
+  return evaluateConditionState(condition, eventLog, latestSensors, latestDisplays, now, since);
 }
 
-function evaluateConditionState(condition, eventLog, latestSensors, now) {
+function evaluateConditionState(condition, eventLog, latestSensors, latestDisplays, now, since) {
   if (!condition || typeof condition !== 'object') return { passed: false, matchCount: 0 };
   if (condition.type === 'all' || condition.type === 'any' || condition.type === 'none') {
     const children = Array.isArray(condition.conditions) ? condition.conditions : [];
     const results = children.map((child) =>
-      evaluateConditionState(child, eventLog, latestSensors, now),
+      evaluateConditionState(child, eventLog, latestSensors, latestDisplays, now, since),
     );
     if (condition.type === 'all') {
       const passed = results.length > 0 && results.every((result) => result.passed);
@@ -110,8 +109,13 @@ function evaluateConditionState(condition, eventLog, latestSensors, now) {
     return evaluateSensorCondition(condition, latestSensors, now);
   }
 
+  if (condition.type === 'led_display') {
+    return evaluateDisplayCondition(condition, latestDisplays);
+  }
+
   let matchCount = 0;
   for (const entry of eventLog) {
+    if (entry.ts < since) continue;
     if (matchesEventCondition(condition, entry.event)) matchCount += 1;
   }
   return {
@@ -201,6 +205,27 @@ function evaluateSensorCondition(condition, latestSensors, now) {
     matchCount += 1;
   }
   return { passed: matchCount > 0, matchCount };
+}
+
+function evaluateDisplayCondition(condition, latestDisplays) {
+  let matchCount = 0;
+  for (const latest of latestDisplays.values()) {
+    if (!matchesDevice(condition.device_id, latest.device_id)) continue;
+    if (!matchesLedLayout(condition.layout, latest.pixels)) continue;
+    matchCount += 1;
+  }
+  return { passed: matchCount > 0, matchCount };
+}
+
+function matchesLedLayout(layout, pixels) {
+  if (!/^[#.01]{5}(?:\n[#.01]{5}){4}$/.test(layout) || !Array.isArray(pixels) || pixels.length !== 25) return false;
+  const cells = layout.replaceAll('\n', '');
+  for (let index = 0; index < 25; index += 1) {
+    const layoutLit = cells[index] === '#' || cells[index] === '1';
+    const pixelLit = pixels[index] > 0;
+    if (layoutLit !== pixelLit) return false;
+  }
+  return true;
 }
 
 function matchesDevice(conditionDeviceId, eventDeviceId) {

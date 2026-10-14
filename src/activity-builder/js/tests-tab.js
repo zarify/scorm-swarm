@@ -1,5 +1,7 @@
 import { getConfig, getSceneProject, notifyConfigChange, onConfigChange, onSceneChange } from './app.js';
+import { createDefaultAction, renderActionEditor } from './action-builder.js';
 import { createDefaultCondition, renderConditionEditor } from './condition-builder.js';
+import { makeButton } from './form-fields.js';
 
 let selectedTestIndex = -1;
 
@@ -19,14 +21,18 @@ export function initTestsTab() {
   renderTestsTab();
 }
 
+function currentTest() {
+  return getConfig().evaluation.test_cases[selectedTestIndex];
+}
+
 function addTest() {
   const config = getConfig();
   const tests = config.evaluation.test_cases;
   tests.push({
     id: makeUniqueId(tests),
-    type: 'effect',
     points: 1,
-    conditions: createDefaultCondition('serial_output'),
+    trigger: [createDefaultAction('press_button')],
+    steps: [{ type: 'check', condition: createDefaultCondition('serial_output'), timeout_seconds: 5 }],
   });
   selectedTestIndex = tests.length - 1;
   notifyConfigChange('tests');
@@ -71,7 +77,7 @@ function renderTestList() {
     title.textContent = testCase.id || `Test ${index + 1}`;
     const meta = document.createElement('small');
     meta.className = 'list-item-meta';
-    meta.textContent = `${testCase.points ?? 1} point${testCase.points === 1 ? '' : 's'} · effect`;
+    meta.textContent = `${testCase.points ?? 1} pt(s) · ${testCase.trigger?.length ?? 0} action(s) · ${testCase.steps?.length ?? 0} step(s)`;
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'list-item-remove';
@@ -95,21 +101,21 @@ function renderTestList() {
 
 function renderTestEditor() {
   const container = document.getElementById('test-editor-content');
-  const testCase = getConfig().evaluation.test_cases[selectedTestIndex];
+  const testCase = currentTest();
   container.replaceChildren();
   if (!testCase) {
     container.className = 'empty-state';
     const title = document.createElement('strong');
     title.textContent = 'Select a test to edit';
     const note = document.createElement('p');
-    note.textContent = 'Each test checks effects visible through the simulator bridge.';
+    note.textContent = 'Each test injects a trigger of actions, then runs ordered checks against the simulator.';
     container.append(title, note);
     return;
   }
   container.className = '';
   const heading = document.createElement('div');
   heading.className = 'detail-heading';
-  heading.innerHTML = '<div><p class="eyebrow">Points-based check</p><h3>Test definition</h3></div><span class="count-badge">EFFECT</span>';
+  heading.innerHTML = '<div><h3>Scripted test</h3></div>';
   container.append(heading);
 
   const grid = document.createElement('div');
@@ -122,25 +128,175 @@ function renderTestEditor() {
     (value) => updateTest({ feedback_on_fail: value }), true, true);
   container.append(grid);
 
-  const conditionShell = document.createElement('div');
-  conditionShell.className = 'condition-editor-shell';
-  const conditionHeading = document.createElement('div');
-  conditionHeading.className = 'condition-editor-title';
-  conditionHeading.innerHTML = '<strong>Pass conditions</strong><small>All configured conditions define this test</small>';
-  const conditionHost = document.createElement('div');
-  conditionShell.append(conditionHeading, conditionHost);
-  container.append(conditionShell);
-  renderConditionEditor({
-    container: conditionHost,
-    condition: testCase.conditions,
-    scene: getSceneProject(),
-    onChange: (conditions) => updateTest({ conditions }),
+  container.append(renderTriggerShell(testCase));
+  container.append(renderFlowShell(testCase));
+}
+
+function renderTriggerShell(testCase) {
+  const shell = document.createElement('div');
+  shell.className = 'condition-editor-shell';
+  const title = document.createElement('div');
+  title.className = 'condition-editor-title';
+  title.innerHTML = '<strong>Trigger</strong><small>Injected actions run first, in order</small>';
+  const list = document.createElement('div');
+  list.className = 'action-list';
+  const trigger = Array.isArray(testCase.trigger) ? testCase.trigger : [];
+  trigger.forEach((action, index) => {
+    const row = document.createElement('div');
+    row.className = 'action-row';
+    const controls = document.createElement('div');
+    controls.className = 'condition-order-controls';
+    controls.append(
+      makeButton('↑', 'Move action up', index === 0, () => moveTriggerAction(index, -1)),
+      makeButton('↓', 'Move action down', index === trigger.length - 1, () => moveTriggerAction(index, 1)),
+    );
+    const host = document.createElement('div');
+    renderActionEditor({
+      container: host,
+      action,
+      scene: getSceneProject(),
+      onChange: (nextAction) => replaceTriggerAction(index, nextAction),
+      onRemove: () => removeTriggerAction(index),
+    });
+    row.append(controls, host);
+    list.append(row);
   });
+  const add = makeButton('+ Add action', 'Add trigger action', false, addTriggerAction);
+  add.classList.add('btn', 'btn-small', 'btn-secondary', 'add-sub-condition');
+  shell.append(title, list, add);
+  return shell;
+}
+
+function renderFlowShell(testCase) {
+  const shell = document.createElement('div');
+  shell.className = 'condition-editor-shell';
+  const title = document.createElement('div');
+  title.className = 'condition-editor-title';
+  title.innerHTML = '<strong>Test flow</strong><small>Steps run in order and stop at the first failing step</small>';
+  const list = document.createElement('div');
+  list.className = 'step-list';
+  const steps = Array.isArray(testCase.steps) ? testCase.steps : [];
+  steps.forEach((step, index) => {
+    list.append(renderStepCard(step, index, steps.length));
+  });
+  const addRow = document.createElement('div');
+  addRow.className = 'step-add-row';
+  const addAction = makeButton('+ Add action step', 'Add action step', false, () => addStep('action'));
+  addAction.classList.add('btn', 'btn-small', 'btn-secondary');
+  const addCheck = makeButton('+ Add check step', 'Add check step', false, () => addStep('check'));
+  addCheck.classList.add('btn', 'btn-small', 'btn-secondary');
+  addRow.append(addAction, addCheck);
+  shell.append(title, list, addRow);
+  return shell;
+}
+
+function renderStepCard(step, index, count) {
+  const isAction = step.type === 'action';
+  const card = document.createElement('div');
+  card.className = 'step-card';
+  const header = document.createElement('div');
+  header.className = 'step-header';
+  const badge = document.createElement('span');
+  badge.className = 'step-kind-badge';
+  badge.dataset.kind = isAction ? 'action' : 'check';
+  badge.textContent = isAction ? 'Do' : 'Check';
+  const controls = document.createElement('div');
+  controls.className = 'condition-order-controls';
+  controls.append(
+    makeButton('↑', 'Move step up', index === 0, () => moveStep(index, -1)),
+    makeButton('↓', 'Move step down', index === count - 1, () => moveStep(index, 1)),
+    makeButton('×', `Remove step ${index + 1}`, false, () => removeStep(index)),
+  );
+  header.append(badge, controls);
+  card.append(header);
+
+  const host = document.createElement('div');
+  if (isAction) {
+    renderActionEditor({
+      container: host,
+      action: step.action,
+      scene: getSceneProject(),
+      onChange: (nextAction) => updateStep(index, { action: nextAction }),
+    });
+    card.append(host);
+  } else {
+    renderConditionEditor({
+      container: host,
+      condition: step.condition,
+      scene: getSceneProject(),
+      onChange: (nextCondition) => updateStep(index, { condition: nextCondition }),
+    });
+    const timeout = document.createElement('div');
+    timeout.className = 'step-timeout';
+    appendNumberField(timeout, 'Timeout seconds', step.timeout_seconds ?? 5,
+      (value) => updateStep(index, { timeout_seconds: value }), { minimum: 0 });
+    card.append(host, timeout);
+  }
+  return card;
+}
+
+function replaceTriggerAction(index, action) {
+  const trigger = [...(currentTest().trigger ?? [])];
+  trigger[index] = action;
+  updateTest({ trigger });
+  renderTestEditor();
+}
+
+function removeTriggerAction(index) {
+  const testCase = currentTest();
+  updateTest({ trigger: (testCase.trigger ?? []).filter((_, actionIndex) => actionIndex !== index) });
+  renderTestEditor();
+}
+
+function moveTriggerAction(index, delta) {
+  const trigger = [...(currentTest().trigger ?? [])];
+  const target = index + delta;
+  if (target < 0 || target >= trigger.length) return;
+  [trigger[index], trigger[target]] = [trigger[target], trigger[index]];
+  updateTest({ trigger });
+  renderTestEditor();
+}
+
+function addTriggerAction() {
+  const trigger = [...(currentTest().trigger ?? []), createDefaultAction()];
+  updateTest({ trigger });
+  renderTestEditor();
+}
+
+function updateStep(index, patch) {
+  const steps = [...(currentTest().steps ?? [])];
+  steps[index] = { ...steps[index], ...patch };
+  updateTest({ steps });
+  renderTestEditor();
+}
+
+function removeStep(index) {
+  const testCase = currentTest();
+  updateTest({ steps: (testCase.steps ?? []).filter((_, stepIndex) => stepIndex !== index) });
+  renderTestEditor();
+}
+
+function moveStep(index, delta) {
+  const steps = [...(currentTest().steps ?? [])];
+  const target = index + delta;
+  if (target < 0 || target >= steps.length) return;
+  [steps[index], steps[target]] = [steps[target], steps[index]];
+  updateTest({ steps });
+  renderTestEditor();
+}
+
+function addStep(kind) {
+  const step = kind === 'action'
+    ? { type: 'action', action: createDefaultAction() }
+    : { type: 'check', condition: createDefaultCondition('serial_output'), timeout_seconds: 5 };
+  const steps = [...(currentTest().steps ?? []), step];
+  updateTest({ steps });
+  renderTestEditor();
 }
 
 function updateTest(patch) {
   const tests = getConfig().evaluation.test_cases;
-  tests[selectedTestIndex] = { ...tests[selectedTestIndex], ...patch, type: 'effect' };
+  tests[selectedTestIndex] = { ...tests[selectedTestIndex], ...patch };
   notifyConfigChange('tests');
   renderTestList();
   updatePointsIndicator();

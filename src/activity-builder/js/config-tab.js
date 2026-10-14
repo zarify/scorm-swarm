@@ -15,6 +15,14 @@ const CAPABILITIES = {
   'cap-load-code': 'load_code',
   'cap-edit-code': 'edit_code',
 };
+const PANEL_VISIBILITY = {
+  'panel-debug': 'debug_panel',
+  'panel-radio-inspector': 'radio_inspector',
+  'panel-runtime-log': 'runtime_log',
+  'panel-env-values': 'environment_values',
+  'panel-header': 'panel_header',
+};
+
 
 export function initConfigTab() {
   for (const [id, [section, key]] of Object.entries(FIELDS)) {
@@ -32,13 +40,15 @@ export function initConfigTab() {
       notifyConfigChange('config');
     });
   }
+  for (const [id, key] of Object.entries(PANEL_VISIBILITY)) {
+    const input = document.getElementById(id);
+    input.addEventListener('change', () => {
+      getConfig().panel_visibility[key] = input.checked;
+      notifyConfigChange('config');
+    });
+  }
 
-  const threshold = document.getElementById('cfg-pass-threshold');
-  threshold.addEventListener('input', () => {
-    const value = threshold.value;
-    getConfig().evaluation.pass_threshold = value === '' ? Number.NaN : Number(value);
-    notifyConfigChange('config');
-  });
+
 
   onConfigChange((config, source) => {
     if (source !== 'config') populate(config);
@@ -53,6 +63,7 @@ function populate(config) {
   for (const [id, key] of Object.entries(CAPABILITIES)) {
     document.getElementById(id).checked = config.capabilities?.[key] !== false;
   }
-  document.getElementById('cfg-pass-threshold').value =
-    Number.isInteger(config.evaluation?.pass_threshold) ? config.evaluation.pass_threshold : '';
+  for (const [id, key] of Object.entries(PANEL_VISIBILITY)) {
+    document.getElementById(id).checked = config.panel_visibility[key] === true;
+  }
 }

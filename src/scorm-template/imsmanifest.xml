@@ -14,7 +14,6 @@
       <title>Swarm activity</title>
       <item identifier="swarm_item" identifierref="swarm_resource" isvisible="true">
         <title>Swarm activity</title>
-        <adlcp:masteryscore>50</adlcp:masteryscore>
       </item>
     </organization>
   </organizations>

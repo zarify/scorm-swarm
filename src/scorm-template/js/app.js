@@ -1,5 +1,7 @@
 import * as scorm from './scorm-wrapper.js';
+import { createSessionPersistence } from './session-persistence.js';
 import { createGrader } from '../../shared/effect-evaluator.js';
+import { createTestRunner } from '../../shared/test-runner.js';
 import {
   consumeHint,
   createHintEventDebouncer,
@@ -15,12 +17,20 @@ import { renderInlineMarkdown } from '../../shared/inline-markdown.js';
 
 let config;
 let grader;
+let runner;
 let hintState;
 let bridge;
 let bridgeReady = false;
 let eventLog = [];
 let hintTimer;
 let terminated = false;
+let runActive = false;
+let runProgress = new Map();
+let persistence = null;
+let sceneCache = null;
+let sceneSaveTimer = null;
+const SCENE_CACHE_DEBOUNCE_MS = 500;
+const seenSimulatorPayloads = new WeakSet();
 
 const hintDebouncer = createHintEventDebouncer((event) => evaluateHintEvent(event), 250);
 
@@ -36,22 +46,44 @@ async function startActivity() {
     }
 
     scorm.init();
-    grader = createGrader({ testCases: config.evaluation.test_cases });
+    grader = createGrader();
     hintState = createHintState();
+    persistence = createSessionPersistence({
+      activityId: config.metadata.activity_id || '',
+      studentId: scorm.getStudentId(),
+      onWarning: (message) => setStatus(message, 'warning'),
+    });
+    const restored = await persistence.restore();
+    const restoredSceneBase64 = restored.state?.scene_bundle_base64 || null;
     renderActivityHeader();
-    renderChecklist(grader.grade());
+    renderChecklist();
     renderHints();
-    document.getElementById('btn-check').addEventListener('click', checkActivity);
+    document.getElementById('btn-check').addEventListener('click', () => void runChecks());
     document.getElementById('btn-reset-session').addEventListener('click', () => void resetSession());
     document.getElementById('btn-request-hint').addEventListener('click', () => evaluateHintEvent({ type: 'manual' }));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'hidden') return;
+      flushSceneSaveNow();
+    });
     window.addEventListener('pagehide', finishSession);
     window.addEventListener('pageshow', (event) => {
       if (!event.persisted) return;
       terminated = false;
       scorm.resume();
     });
-    await connectSimulator();
-    setStatus('Activity ready. Explore the swarm, then check your evidence.', 'info');
+    await connectSimulator(restoredSceneBase64);
+    runner = createTestRunner({ testCases: config.evaluation.test_cases, bridge, onEvent: handleSimulatorEvent });
+    // Cache the freshly connected scene without saving it: the packaged scene
+    // is not student progress, and a save here would shadow a later oversized
+    // state with a small snapshot that fits suspend_data.
+    await refreshSceneCache();
+    if (restoredSceneBase64) {
+      setStatus('Welcome back — your saved scene has been restored.', 'info');
+    } else if (restored.notice) {
+      setStatus(restored.notice, 'warning');
+    } else {
+      setStatus('Activity ready. Explore the swarm, then check your evidence.', 'info');
+    }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error');
   }
@@ -65,9 +97,13 @@ function renderActivityHeader() {
   );
 }
 
-async function connectSimulator() {
+async function connectSimulator(restoredSceneBase64 = null) {
   const frame = document.getElementById('simulator-frame');
-  const simulatorUrl = 'sim/index.html?mode=learner&bundle=../config/scene.swarm';
+  // A restored scene replaces the packaged one, so the frame must not load
+  // the packaged bundle first and then get overwritten.
+  const simulatorUrl = restoredSceneBase64
+    ? 'sim/index.html?mode=learner'
+    : 'sim/index.html?mode=learner&bundle=../config/scene.swarm';
   const frameWindow = frame.contentWindow;
   if (!frameWindow) throw new Error('Simulator frame is unavailable.');
   const targetOrigin = new URL(simulatorUrl, window.location.href).origin;
@@ -81,58 +117,149 @@ async function connectSimulator() {
   }
   bridgeReady = true;
   await connectingBridge.setCapabilities(config.capabilities);
+  await connectingBridge.setUiVisibility(config.panel_visibility);
+  if (restoredSceneBase64) {
+    await connectingBridge.loadBundle(restoredSceneBase64);
+  }
   document.getElementById('simulator-status').textContent = 'Connected';
 }
 
+/** Cache the simulator's current scene bundle. Deliberately saves nothing. */
+async function refreshSceneCache() {
+  if (!bridgeReady || !bridge) return;
+  try {
+    sceneCache = await bridge.getBundle();
+  } catch {
+    // A get-bundle failure only means the cache stays at its last value.
+  }
+}
+
+/** Debounced save after a code-load event; the load-bundle is the save point. */
+function scheduleSceneCacheSave() {
+  clearTimeout(sceneSaveTimer);
+  sceneSaveTimer = setTimeout(() => {
+    sceneSaveTimer = null;
+    void saveSceneCacheNow();
+  }, SCENE_CACHE_DEBOUNCE_MS);
+}
+
+async function saveSceneCacheNow() {
+  await refreshSceneCache();
+  if (typeof sceneCache !== 'string' || sceneCache.length === 0) return;
+  if (!persistence) return;
+  try {
+    await persistence.persist({ scene_bundle_base64: sceneCache });
+  } catch (error) {
+    console.warn('[App] Could not persist scene state:', error instanceof Error ? error.message : String(error));
+  }
+}
+
+/** Synchronous last-word save for unload paths where async writes may not land. */
+function flushSceneSaveNow() {
+  clearTimeout(sceneSaveTimer);
+  sceneSaveTimer = null;
+  if (!persistence || typeof sceneCache !== 'string' || sceneCache.length === 0) return;
+  try {
+    persistence.persistNow({ scene_bundle_base64: sceneCache });
+    scorm.flushPendingWrites();
+  } catch (error) {
+    console.warn('[App] Could not flush scene state:', error instanceof Error ? error.message : String(error));
+  }
+}
+
 function handleSimulatorEvent(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  if (payload.event && typeof payload.event === 'object') {
+    if (seenSimulatorPayloads.has(payload)) return;
+    seenSimulatorPayloads.add(payload);
+  } else if (typeof payload.kind === 'string') {
+    payload = { ts: Date.now(), event: payload };
+  } else {
+    return;
+  }
+
   const event = payload.event;
   grader.record(payload);
   if (event.kind === 'code-load') {
     hintState = createHintState();
     hintDebouncer.cancel();
     renderHints();
+    scheduleSceneCacheSave();
   }
   eventLog.push(payload);
   if (eventLog.length > 200) eventLog.shift();
   renderEventLog();
-  renderChecklist(grader.grade());
   hintDebouncer.push({ type: 'sim_event', payload });
 }
 
-function checkActivity() {
-  if (!grader) return;
+function renderRunProgress(progress) {
+  runProgress.set(progress.id, progress.status);
+  renderChecklist([], { progress: runProgress });
+}
+
+async function runChecks() {
+  if (!runner || runActive) return;
+  runActive = true;
+  const button = document.getElementById('btn-check');
+  const previousLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Running…';
+  runProgress = new Map();
   recordCheckAttempt(hintState);
-  const results = grader.grade();
-  const failedCheckCount = results.filter((result) => !result.passed).length;
-  const testCases = config.evaluation.test_cases;
-  const pointsById = new Map(testCases.map((testCase) => [testCase.id, testCase.points ?? 1]));
-  const totalPoints = testCases.reduce((sum, testCase) => sum + (testCase.points ?? 1), 0);
-  const earnedPoints = results.reduce((sum, result) =>
-    sum + (result.passed ? (pointsById.get(result.id) ?? 0) : 0), 0);
-  const score = totalPoints > 0 ? Math.round((earnedPoints / totalPoints) * 100) : 0;
-  const passed = score >= config.evaluation.pass_threshold;
-  scorm.reportScore(score, config.evaluation.pass_threshold);
-  renderChecklist(results, { showFeedback: true });
-  document.getElementById('score-display').textContent = `${score}%`;
-  setStatus(
-    `${earnedPoints} of ${totalPoints} points · ${passed ? 'passing score' : `pass threshold ${config.evaluation.pass_threshold}%`}`,
-    passed ? 'success' : 'warning',
-  );
-  evaluateHintEvent({ type: 'test_fail', failedCheckCount });
+  try {
+    const outcome = await runner.runAll({ onProgress: renderRunProgress });
+    if (!Object.prototype.hasOwnProperty.call(outcome, 'score')) {
+      runProgress.clear();
+      renderChecklist();
+      return;
+    }
+    scorm.reportScore(outcome.score);
+    renderChecklist(outcome.results, { showFeedback: true });
+    document.getElementById('score-display').textContent = `${outcome.score}%`;
+    setStatus(`${outcome.earnedPoints} of ${outcome.totalPoints} points`, 'info');
+    evaluateHintEvent({
+      type: 'test_fail',
+      failedCheckCount: outcome.results.filter((result) => !result.passed).length,
+    });
+  } catch (error) {
+    setStatus(`Test run failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+  } finally {
+    runActive = false;
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
 }
 
 async function resetSession() {
+  runner?.cancel();
   grader.reset();
   hintState = createHintState();
   eventLog = [];
+  runProgress.clear();
   hintDebouncer.cancel();
   clearTimeout(hintTimer);
   hintTimer = undefined;
+  clearTimeout(sceneSaveTimer);
+  sceneSaveTimer = null;
   renderEventLog();
-  renderChecklist(grader.grade());
+  renderChecklist();
   renderHints();
   document.getElementById('score-display').textContent = '—';
   setStatus('Session evidence reset. The scene remains loaded.', 'info');
+  if (persistence) {
+    try {
+      // The current scene becomes the baseline: if the reset re-emits a
+      // code-load for the same bundle, the debounced save is a fingerprint
+      // no-op and the discarded session stays discarded.
+      await persistence.discard(
+        typeof sceneCache === 'string' && sceneCache.length > 0
+          ? { scene_bundle_base64: sceneCache }
+          : undefined,
+      );
+    } catch (error) {
+      setStatus(`Saved state could not be cleared: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    }
+  }
   if (bridgeReady) {
     try {
       await bridge.reset();
@@ -141,6 +268,7 @@ async function resetSession() {
     }
   }
 }
+
 
 function evaluateHintEvent(event) {
   clearTimeout(hintTimer);
@@ -152,32 +280,43 @@ function evaluateHintEvent(event) {
   }
 }
 
-function renderChecklist(results, { showFeedback = false } = {}) {
+function renderChecklist(results = [], { showFeedback = false, progress = runProgress } = {}) {
   const panel = document.getElementById('test-checklist');
   panel.replaceChildren();
   const resultsById = new Map(results.map((result) => [result.id, result]));
   let passed = 0;
   config.evaluation.test_cases.forEach((testCase) => {
-    const result = resultsById.get(testCase.id) ?? { passed: false, matchCount: 0 };
-    if (result.passed) passed += 1;
+    const result = resultsById.get(testCase.id);
+    const state = result
+      ? result.passed ? 'passed' : 'failed'
+      : progress.get(testCase.id) ?? 'not run';
+    if (state === 'passed') passed += 1;
+    const points = testCase.points ?? 1;
     const row = document.createElement('div');
     row.className = 'test-row';
-    row.dataset.passed = String(result.passed);
+    row.dataset.passed = String(state === 'passed');
+    row.dataset.status = state;
     const mark = document.createElement('span');
     mark.className = 'test-row-mark';
-    mark.textContent = result.passed ? '✓' : '·';
+    mark.textContent = state === 'passed' ? '✓' : state === 'failed' ? '×' : state === 'running' ? '…' : '·';
     const content = document.createElement('span');
     content.className = 'test-row-content';
     const title = document.createElement('strong');
     title.textContent = testCase.id;
     const detail = document.createElement('small');
-    detail.textContent = `${result.passed ? 'Evidence collected' : `${result.matchCount} matching event${result.matchCount === 1 ? '' : 's'}`} · ${testCase.points ?? 1} pt${testCase.points === 1 ? '' : 's'}`;
+    detail.textContent = `${state === 'running' ? 'running…' : state} · ${points} pt${points === 1 ? '' : 's'}`;
     content.append(title, detail);
-    if (showFeedback) {
+    if (showFeedback && result) {
       const feedback = document.createElement('small');
       feedback.className = 'test-feedback';
       feedback.textContent = result.passed ? testCase.feedback_on_pass ?? '' : testCase.feedback_on_fail ?? '';
       if (feedback.textContent) content.append(feedback);
+      if (!result.passed && result.detail) {
+        const resultDetail = document.createElement('small');
+        resultDetail.className = 'test-result-detail';
+        resultDetail.textContent = result.detail;
+        content.append(resultDetail);
+      }
     }
     row.append(mark, content);
     panel.append(row);
@@ -244,6 +383,7 @@ function formatEvent(payload) {
     case 'radio-rx': return `${event.device_id} ← ${event.from_device_id} · radio RX · RSSI ${event.rssi}`;
     case 'radio-blocked': return `${event.device_id} · radio blocked · ${event.reason}`;
     case 'sensor': return `${event.device_id} · ${event.sensor}: ${event.value}`;
+    case 'display': return `${event.device_id} · display ${event.pixels.filter((pixel) => pixel > 0).length} lit`;
     case 'code-load': return `${event.device_id} · program loaded; evidence reset`;
     default: return event.kind;
   }
@@ -260,6 +400,8 @@ function finishSession() {
   hintDebouncer.cancel();
   clearTimeout(hintTimer);
   hintTimer = undefined;
+  // persistNow is synchronous suspend_data writes, so the save survives teardown.
+  flushSceneSaveNow();
   scorm.terminate();
 }
 

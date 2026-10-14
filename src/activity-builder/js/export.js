@@ -91,7 +91,6 @@ export function generateManifest(config) {
       <title>${title}</title>
       <item identifier="swarm_item" identifierref="swarm_resource" isvisible="true">
         <title>${title}</title>
-        <adlcp:masteryscore>${config.evaluation.pass_threshold}</adlcp:masteryscore>
       </item>
     </organization>
   </organizations>

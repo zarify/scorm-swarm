@@ -29,12 +29,22 @@
         "edit_code": { "type": "boolean", "default": true }
       }
     },
+    "panel_visibility": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "debug_panel": { "type": "boolean", "default": false },
+        "radio_inspector": { "type": "boolean", "default": true },
+        "runtime_log": { "type": "boolean", "default": false },
+        "environment_values": { "type": "boolean", "default": true },
+        "panel_header": { "type": "boolean", "default": false }
+      }
+    },
     "evaluation": {
       "type": "object",
       "additionalProperties": false,
       "required": ["test_cases"],
       "properties": {
-        "pass_threshold": { "type": "integer", "minimum": 0, "maximum": 100, "default": 50 },
         "test_cases": {
           "type": "array",
           "minItems": 1,
@@ -70,7 +80,8 @@
         { "$ref": "#/$defs/buttonPress" },
         { "$ref": "#/$defs/radioTx" },
         { "$ref": "#/$defs/radioRx" },
-        { "$ref": "#/$defs/sensorReading" }
+        { "$ref": "#/$defs/sensorReading" },
+        { "$ref": "#/$defs/ledDisplay" }
       ]
     },
     "composite": {
@@ -173,17 +184,110 @@
         "min_duration_seconds": { "type": "number", "minimum": 0, "default": 0 }
       }
     },
+    "ledDisplay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "layout"],
+      "properties": {
+        "type": { "const": "led_display" },
+        "device_id": { "$ref": "#/$defs/deviceId" },
+        "layout": { "type": "string", "pattern": "^[#.01]{5}(\\n[#.01]{5}){4}$" }
+      }
+    },
+    "actionTarget": { "type": ["string", "null"] },
+    "testAction": {
+      "oneOf": [
+        { "$ref": "#/$defs/actionRadioBroadcast" },
+        { "$ref": "#/$defs/actionPressButton" },
+        { "$ref": "#/$defs/actionSetNodeLevel" },
+        { "$ref": "#/$defs/actionAddNode" }
+      ]
+    },
+    "actionRadioBroadcast": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id"],
+      "properties": {
+        "type": { "const": "radio_broadcast" },
+        "device_id": { "$ref": "#/$defs/actionTarget" },
+        "channel": { "$ref": "#/$defs/nullableInteger" },
+        "group": { "$ref": "#/$defs/nullableInteger" },
+        "payload": { "type": "string", "default": "" },
+        "count": { "type": "integer", "minimum": 1, "default": 1 },
+        "interval_ms": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "actionPressButton": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "device_id"],
+      "properties": {
+        "type": { "const": "press_button" },
+        "device_id": { "$ref": "#/$defs/actionTarget" },
+        "button": { "enum": ["A", "B", "AB"], "default": "A" },
+        "count": { "type": "integer", "minimum": 1, "default": 1 },
+        "interval_ms": { "type": "integer", "minimum": 0, "default": 0 }
+      }
+    },
+    "actionSetNodeLevel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "node_id", "value"],
+      "properties": {
+        "type": { "const": "set_node_level" },
+        "node_id": { "$ref": "#/$defs/actionTarget" },
+        "value": { "type": "number" }
+      }
+    },
+    "actionAddNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "node_type", "x", "y"],
+      "properties": {
+        "type": { "const": "add_node" },
+        "node_type": { "enum": ["light", "sound", "temperature", "magnet"] },
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "level": { "$ref": "#/$defs/nullableNumber" },
+        "duration_seconds": { "type": "number", "minimum": 0, "default": 10 }
+      }
+    },
+    "testStep": {
+      "oneOf": [
+        { "$ref": "#/$defs/stepAction" },
+        { "$ref": "#/$defs/stepCheck" }
+      ]
+    },
+    "stepAction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "action"],
+      "properties": {
+        "type": { "const": "action" },
+        "action": { "$ref": "#/$defs/testAction" }
+      }
+    },
+    "stepCheck": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "condition"],
+      "properties": {
+        "type": { "const": "check" },
+        "condition": { "$ref": "#/$defs/condition" },
+        "timeout_seconds": { "type": "number", "minimum": 0, "default": 5 }
+      }
+    },
     "testCase": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "type", "conditions"],
+      "required": ["id", "trigger", "steps"],
       "properties": {
         "id": { "type": "string" },
-        "type": { "const": "effect" },
         "points": { "type": "integer", "minimum": 0, "default": 1 },
         "feedback_on_pass": { "type": "string" },
         "feedback_on_fail": { "type": "string" },
-        "conditions": { "$ref": "#/$defs/condition" }
+        "trigger": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/testAction" } },
+        "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/testStep" } }
       }
     },
     "hint": {

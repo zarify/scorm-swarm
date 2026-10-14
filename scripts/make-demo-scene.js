@@ -14,8 +14,11 @@ const aliceProgram = [
   'print("hello 42")',
   '',
   'while True:',
+  '    if button_a.was_pressed():',
+  '        print("button a")',
+  '        display.show(Image.HAPPY)',
   '    radio.send("ping")',
-  '    sleep(2000)',
+  '    sleep(500)',
 ].join('\n');
 const bobProgram = [
   'from microbit import sleep',

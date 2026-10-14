@@ -14,6 +14,14 @@ const DEFAULT_CAPABILITIES = {
   edit_code: true,
 };
 
+const DEFAULT_PANEL_VISIBILITY = {
+  debug_panel: false,
+  radio_inspector: true,
+  runtime_log: false,
+  environment_values: true,
+  panel_header: false,
+};
+
 export function normalizeConfig(rawConfig) {
   if (!isObject(rawConfig)) return rawConfig;
   const config = { ...rawConfig };
@@ -27,6 +35,11 @@ export function normalizeConfig(rawConfig) {
     : isObject(rawConfig.capabilities)
       ? addDefaults(rawConfig.capabilities, DEFAULT_CAPABILITIES)
       : rawConfig.capabilities;
+  config.panel_visibility = rawConfig.panel_visibility === undefined
+    ? { ...DEFAULT_PANEL_VISIBILITY }
+    : isObject(rawConfig.panel_visibility)
+      ? addDefaults(rawConfig.panel_visibility, DEFAULT_PANEL_VISIBILITY)
+      : rawConfig.panel_visibility;
   config.evaluation = normalizeEvaluation(rawConfig.evaluation);
   config.hints = Array.isArray(rawConfig.hints)
     ? rawConfig.hints.map(normalizeHint)
@@ -68,6 +81,8 @@ export function normalizeCondition(condition) {
       });
     case 'sensor_reading':
       return addDefaults(normalized, { min: null, max: null, min_duration_seconds: 0 });
+    case 'led_display':
+      return addDefaults(normalized, { device_id: null });
     default:
       return normalized;
   }
@@ -76,10 +91,10 @@ export function normalizeCondition(condition) {
 function normalizeEvaluation(evaluation) {
   if (!isObject(evaluation)) {
     return evaluation === undefined
-      ? { pass_threshold: 50, test_cases: [] }
+      ? { test_cases: [] }
       : evaluation;
   }
-  const normalized = addDefaults(evaluation, { pass_threshold: 50, test_cases: [] });
+  const normalized = addDefaults(evaluation, { test_cases: [] });
   if (Array.isArray(evaluation.test_cases)) {
     normalized.test_cases = evaluation.test_cases.map(normalizeTestCase);
   }
@@ -89,10 +104,52 @@ function normalizeEvaluation(evaluation) {
 function normalizeTestCase(testCase) {
   if (!isObject(testCase)) return testCase;
   const normalized = addDefaults(testCase, { points: 1 });
-  if (isObject(testCase.conditions)) {
-    normalized.conditions = normalizeCondition(testCase.conditions);
+  if (Array.isArray(testCase.trigger)) {
+    normalized.trigger = testCase.trigger.map(normalizeTestAction);
+  }
+  if (Array.isArray(testCase.steps)) {
+    normalized.steps = testCase.steps.map(normalizeTestStep);
   }
   return normalized;
+}
+
+function normalizeTestAction(action) {
+  if (!isObject(action)) return action;
+  switch (action.type) {
+    case 'radio_broadcast':
+      return addDefaults(action, {
+        channel: null,
+        group: null,
+        payload: '',
+        count: 1,
+        interval_ms: 0,
+      });
+    case 'press_button':
+      return addDefaults(action, { button: 'A', count: 1, interval_ms: 0 });
+    case 'set_node_level':
+      return addDefaults(action, {});
+    case 'add_node':
+      return addDefaults(action, { level: null, duration_seconds: 10 });
+    default:
+      return action;
+  }
+}
+
+function normalizeTestStep(step) {
+  if (!isObject(step)) return step;
+  if (step.type === 'action') {
+    return isObject(step.action)
+      ? { ...step, action: normalizeTestAction(step.action) }
+      : step;
+  }
+  if (step.type === 'check') {
+    const normalized = addDefaults(step, { timeout_seconds: 5 });
+    if (isObject(step.condition)) {
+      normalized.condition = normalizeCondition(step.condition);
+    }
+    return normalized;
+  }
+  return step;
 }
 
 function normalizeHint(hint) {

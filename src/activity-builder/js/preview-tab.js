@@ -1,4 +1,5 @@
 import { createGrader } from '../../shared/effect-evaluator.js';
+import { createTestRunner } from '../../shared/test-runner.js';
 import {
   consumeHint,
   createHintEventDebouncer,
@@ -13,6 +14,10 @@ import { getConfig, getSceneBundle, onConfigChange, onSceneChange, showToast } f
 let bridge;
 let bridgeReady = false;
 let grader;
+let runner;
+let checkInProgress = false;
+let runProgress = new Map();
+const seenSimulatorPayloads = new WeakSet();
 let hintState;
 let latestHintResult = { visibleHints: [], nextEvaluationDelayMs: null };
 let eventLog = [];
@@ -20,38 +25,49 @@ let hintTimer;
 const hintDebouncer = createHintEventDebouncer(evaluateHintEvent, 250);
 
 export function initPreviewTab() {
-  grader = createGrader({ testCases: getConfig().evaluation.test_cases });
+  grader = createGrader();
   hintState = createHintState();
   const iframe = document.getElementById('preview-iframe');
   void connectPreview(iframe);
   document.getElementById('btn-reset-session').addEventListener('click', () => void resetSession());
-  document.getElementById('btn-check-session').addEventListener('click', checkSession);
+  document.getElementById('btn-check-session').addEventListener('click', () => void checkSession());
   onConfigChange((config) => {
-    grader = createGrader({ testCases: config.evaluation.test_cases });
+    runner?.cancel();
+    grader = createGrader();
     hintState = createHintState();
     eventLog = [];
+    runProgress = new Map();
     hintDebouncer.cancel();
     clearTimeout(hintTimer);
     hintTimer = undefined;
     renderEventLog();
     renderGrades(null);
     evaluateHintEvent({ type: 'timer' });
-    if (bridgeReady) void bridge.setCapabilities(config.capabilities);
+    if (bridgeReady) {
+      void bridge.setCapabilities(config.capabilities);
+      void bridge.setUiVisibility(config.panel_visibility);
+      rebuildRunner();
+    }
   });
   onSceneChange((bundle) => {
+    runner?.cancel();
     grader.reset();
     hintState = createHintState();
     eventLog = [];
+    runProgress = new Map();
     hintDebouncer.cancel();
     clearTimeout(hintTimer);
     hintTimer = undefined;
     renderEventLog();
     renderGrades(null);
     evaluateHintEvent({ type: 'timer' });
-    if (bundle && bridgeReady) {
-      void bridge.loadBundle(bundle).catch((error) =>
-        showToast(`Could not load preview scene: ${error.message}`, 'error'),
-      );
+    if (bridgeReady) {
+      rebuildRunner();
+      if (bundle) {
+        void bridge.loadBundle(bundle).catch((error) =>
+          showToast(`Could not load preview scene: ${error.message}`, 'error'),
+        );
+      }
     }
   });
   renderEventLog();
@@ -71,19 +87,7 @@ async function connectPreview(iframe) {
   const targetOrigin = new URL(learnerUrl, window.location.href).origin;
   bridge = connectSimBridge(iframe.contentWindow, targetOrigin);
   const connectingBridge = bridge;
-  bridge.onEvent((payload) => {
-    const event = payload.event;
-    grader.record(payload);
-    if (event.kind === 'code-load') {
-      hintState = createHintState();
-      hintDebouncer.cancel();
-    }
-    eventLog.push(payload);
-    if (eventLog.length > 100) eventLog.shift();
-    renderEventLog();
-    renderGrades(grader.grade());
-    hintDebouncer.push({ type: 'sim_event', payload });
-  });
+  bridge.onEvent(handleSimulatorEvent);
   iframe.src = learnerUrl;
 
   try {
@@ -91,26 +95,87 @@ async function connectPreview(iframe) {
     if (!ready || connectingBridge !== bridge) return;
     bridgeReady = true;
     await connectingBridge.setCapabilities(getConfig().capabilities);
+    await connectingBridge.setUiVisibility(getConfig().panel_visibility);
     const bundle = getSceneBundle();
     if (bundle) await connectingBridge.loadBundle(bundle);
+    rebuildRunner();
     setPreviewStatus('Learner simulator connected.');
   } catch (error) {
     setPreviewStatus(error instanceof Error ? error.message : 'Learner simulator failed to connect.', 'error');
   }
 }
 
-function checkSession() {
+
+function rebuildRunner() {
+  runner?.cancel();
+  runner = bridgeReady
+    ? createTestRunner({ testCases: getConfig().evaluation.test_cases, bridge, onEvent: handleSimulatorEvent })
+    : undefined;
+}
+
+function handleSimulatorEvent(payload) {
+  if (!payload || typeof payload !== 'object') return;
+  if (payload.event && typeof payload.event === 'object') {
+    if (seenSimulatorPayloads.has(payload)) return;
+    seenSimulatorPayloads.add(payload);
+  } else if (typeof payload.kind === 'string') {
+    payload = { ts: Date.now(), event: payload };
+  } else {
+    return;
+  }
+
+  const event = payload.event;
+  grader.record(payload);
+  if (event.kind === 'code-load') {
+    hintState = createHintState();
+    hintDebouncer.cancel();
+  }
+  eventLog.push(payload);
+  if (eventLog.length > 100) eventLog.shift();
+  renderEventLog();
+  hintDebouncer.push({ type: 'sim_event', payload });
+}
+async function checkSession() {
+  if (!runner || checkInProgress) return;
+  checkInProgress = true;
+  const button = document.getElementById('btn-check-session');
+  const previousLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Running…';
+  runProgress = new Map();
   recordCheckAttempt(hintState);
-  const grades = grader.grade();
-  const failedCheckCount = grades.filter((grade) => !grade.passed).length;
-  renderGrades(grades);
-  evaluateHintEvent({ type: 'test_fail', failedCheckCount });
+  try {
+    const outcome = await runner.runAll({ onProgress: renderRunProgress });
+    if (!Object.prototype.hasOwnProperty.call(outcome, 'score')) {
+      runProgress.clear();
+      renderGrades(null);
+      return;
+    }
+    renderGrades(outcome.results, { showFeedback: true });
+    evaluateHintEvent({
+      type: 'test_fail',
+      failedCheckCount: outcome.results.filter((result) => !result.passed).length,
+    });
+  } catch (error) {
+    showToast(`Test run failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+  } finally {
+    checkInProgress = false;
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+}
+
+function renderRunProgress(progress) {
+  runProgress.set(progress.id, progress.status);
+  renderGrades([]);
 }
 
 async function resetSession() {
+  runner?.cancel();
   grader.reset();
   hintState = createHintState();
   eventLog = [];
+  runProgress.clear();
   hintDebouncer.cancel();
   clearTimeout(hintTimer);
   hintTimer = undefined;
@@ -158,10 +223,10 @@ function renderEventLog() {
   }
 }
 
-function renderGrades(grades) {
+function renderGrades(results, { showFeedback = false } = {}) {
   const list = document.getElementById('preview-grades');
   list.replaceChildren();
-  if (!grades) {
+  if (!results) {
     const empty = document.createElement('p');
     empty.className = 'empty-note';
     empty.textContent = 'Run the scene, then select Check.';
@@ -169,24 +234,32 @@ function renderGrades(grades) {
     document.getElementById('preview-score').textContent = '—';
     return;
   }
-  const config = getConfig();
-  const cases = config.evaluation.test_cases;
-  const byId = new Map(cases.map((testCase) => [testCase.id, testCase]));
+  const cases = getConfig().evaluation.test_cases;
+  const resultsById = new Map(results.map((result) => [result.id, result]));
+  const possible = cases.reduce((sum, testCase) => sum + (testCase.points ?? 1), 0);
   let earned = 0;
-  let possible = 0;
-  for (const grade of grades) {
-    const testCase = byId.get(grade.id);
-    const points = testCase?.points ?? 1;
-    possible += points;
-    if (grade.passed) earned += points;
+  for (const testCase of cases) {
+    const result = resultsById.get(testCase.id);
+    const state = result
+      ? result.passed ? 'passed' : 'failed'
+      : runProgress.get(testCase.id) ?? 'not run';
+    const points = testCase.points ?? 1;
+    if (state === 'passed') earned += points;
     const row = document.createElement('div');
     row.className = 'grade-row';
-    row.dataset.passed = String(grade.passed);
+    row.dataset.passed = String(state === 'passed');
+    row.dataset.status = state;
     const title = document.createElement('strong');
-    title.textContent = grade.id;
+    title.textContent = testCase.id;
     const detail = document.createElement('span');
-    const feedback = grade.passed ? testCase?.feedback_on_pass : testCase?.feedback_on_fail;
-    detail.textContent = `${grade.passed ? 'PASS' : 'WAIT'} · ${grade.matchCount} match${grade.matchCount === 1 ? '' : 'es'} · ${points} pt${points === 1 ? '' : 's'}${feedback ? ` · ${feedback}` : ''}`;
+    const label = state === 'passed' ? 'PASS' : state === 'failed' ? 'FAIL' : state === 'running' ? 'RUNNING…' : 'NOT RUN';
+    const parts = [`${label} · ${points} pt${points === 1 ? '' : 's'}`];
+    if (showFeedback && result) {
+      const feedback = result.passed ? testCase.feedback_on_pass : testCase.feedback_on_fail;
+      if (feedback) parts.push(feedback);
+      if (!result.passed && result.detail) parts.push(result.detail);
+    }
+    detail.textContent = parts.join(' · ');
     row.append(title, detail);
     list.append(row);
   }
@@ -237,6 +310,8 @@ function formatEvent(payload) {
       return `${time} · ${event.device_id} · radio blocked: ${event.reason}`;
     case 'sensor':
       return `${time} · ${event.device_id} · ${event.sensor} = ${event.value}`;
+    case 'display':
+      return `${time} · ${event.device_id} · display ${event.pixels.filter((pixel) => pixel > 0).length} lit`;
     case 'code-load':
       return `${time} · ${event.device_id} · program loaded (evidence reset)`;
     default:

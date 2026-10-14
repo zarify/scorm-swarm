@@ -2,7 +2,7 @@
   "metadata": {
     "activity_id": "demo-activity",
     "title": "Radio Relay Field Lab",
-    "instructions_markdown": "Watch **Alice** announce her message and send a radio packet. Use the event log to verify what **Bob** receives, then press Alice's A button to complete the final check.\n\nThe scene is fixed in place; focus on the effects, not the program text.",
+    "instructions_markdown": "Watch **Alice** announce her message and send radio packets. Use the event log to see what **Bob** receives, then select Check to run the scripted tests; they inject Alice's A press.\n\nThe scene is fixed in place; focus on the effects, not the program text.",
     "learning_objectives_markdown": "- Distinguish serial output from radio transmission.\n- Explain how radio group settings affect delivery.",
     "teacher_notes_markdown": "The demo scene configures Bob as a group 42 receiver before Alice starts transmitting."
   },
@@ -14,53 +14,75 @@
     "edit_code": false
   },
   "evaluation": {
-    "pass_threshold": 80,
     "test_cases": [
       {
-        "id": "serial-hello",
-        "type": "effect",
+        "id": "button-a-serial",
         "points": 1,
-        "feedback_on_pass": "Alice announced hello 42.",
-        "feedback_on_fail": "Wait for Alice's serial message.",
-        "conditions": {
-          "type": "serial_output",
-          "device_id": "alice",
-          "match": "contains",
-          "value": "hello",
-          "case_sensitive": false,
-          "min_count": 1
-        }
+        "feedback_on_pass": "Alice printed \"button a\" on her serial line.",
+        "feedback_on_fail": "Press Alice's A button and wait for \"button a\" on her serial output.",
+        "trigger": [
+          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+        ],
+        "steps": [
+          {
+            "type": "check",
+            "condition": {
+              "type": "serial_output",
+              "device_id": "alice",
+              "match": "contains",
+              "value": "button a",
+              "case_sensitive": true,
+              "min_count": 1
+            },
+            "timeout_seconds": 5
+          }
+        ]
       },
       {
-        "id": "radio-group-42",
-        "type": "effect",
+        "id": "button-a-display",
         "points": 2,
-        "feedback_on_pass": "Bob received a group 42 packet.",
-        "feedback_on_fail": "Check the radio event log for Bob's reception.",
-        "conditions": {
-          "type": "radio_rx",
-          "device_id": null,
-          "from_device_id": null,
-          "channel": null,
-          "group": 42,
-          "payload": null,
-          "rssi_min": null,
-          "rssi_max": null,
-          "min_count": 1
-        }
+        "feedback_on_pass": "Alice's display shows the Image.HAPPY frame ..... / .#.#. / ..... / #...# / .###. (# = lit).",
+        "feedback_on_fail": "Press Alice's A button; her display must show the Image.HAPPY frame ..... / .#.#. / ..... / #...# / .###. (# = lit).",
+        "trigger": [
+          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+        ],
+        "steps": [
+          {
+            "type": "check",
+            "condition": {
+              "type": "led_display",
+              "device_id": "alice",
+              "layout": ".....\n.#.#.\n.....\n#...#\n.###."
+            },
+            "timeout_seconds": 5
+          }
+        ]
       },
       {
-        "id": "button-a",
-        "type": "effect",
+        "id": "bob-hears-ping",
         "points": 1,
-        "feedback_on_pass": "You pressed A on a device.",
-        "feedback_on_fail": "Press Alice's A button in the simulator.",
-        "conditions": {
-          "type": "button_press",
-          "device_id": null,
-          "button": "A",
-          "min_count": 1
-        }
+        "feedback_on_pass": "Bob received Alice's \"ping\" on radio group 42.",
+        "feedback_on_fail": "Check the radio log: Bob should receive Alice's \"ping\" on group 42.",
+        "trigger": [
+          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+        ],
+        "steps": [
+          {
+            "type": "check",
+            "condition": {
+              "type": "radio_rx",
+              "device_id": "bob",
+              "from_device_id": "alice",
+              "channel": null,
+              "group": 42,
+              "payload": { "match": "contains", "value": "ping", "case_sensitive": true },
+              "rssi_min": null,
+              "rssi_max": null,
+              "min_count": 1
+            },
+            "timeout_seconds": 8
+          }
+        ]
       }
     ]
   },

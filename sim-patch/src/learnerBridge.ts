@@ -38,10 +38,21 @@ export type BridgeEvent =
       sensor: RuntimeSensorId;
       value: number;
     }
-  | { kind: 'code-load'; device_id: string };
+  | { kind: 'code-load'; device_id: string }
+  | { kind: 'display'; device_id: string; pixels: number[] };
 
 export interface BridgeCommand {
-  type: 'load-bundle' | 'get-bundle' | 'set-capabilities' | 'reset';
+  type:
+    | 'load-bundle'
+    | 'get-bundle'
+    | 'set-capabilities'
+    | 'reset'
+    | 'press-button'
+    | 'radio-broadcast'
+    | 'set-node-level'
+    | 'add-node'
+    | 'set-ui-visibility'
+    | 'get-display';
   id?: string;
   payload?: unknown;
 }
@@ -52,12 +63,21 @@ export interface LearnerCapabilities {
   load_code: boolean;
   edit_code: boolean;
 }
+export interface LearnerUiVisibility {
+  debug_panel: boolean;
+  radio_inspector: boolean;
+  runtime_log: boolean;
+  environment_values: boolean;
+  panel_header: boolean;
+}
+
 
 
 export interface SimLearnerBridge {
   onCommand(handler: (command: BridgeCommand) => void | Promise<void>): () => void;
   sendBundle(id: string | undefined, base64: string): void;
   sendError(id: string | undefined, error: unknown): void;
+  sendDisplayState(id: string | undefined, displays: Record<string, number[]>): void;
 }
 
 interface BridgeEnvelope {
@@ -87,6 +107,12 @@ const allowedCommands: Record<BridgeCommand['type'], true> = {
   'get-bundle': true,
   'set-capabilities': true,
   reset: true,
+  'press-button': true,
+  'radio-broadcast': true,
+  'set-node-level': true,
+  'add-node': true,
+  'set-ui-visibility': true,
+  'get-display': true,
 };
 
 export function installLearnerBridge(): SimLearnerBridge {
@@ -175,6 +201,15 @@ export function installLearnerBridge(): SimLearnerBridge {
         type: 'error',
         ...(id === undefined ? {} : { id }),
         payload: { message: error instanceof Error ? error.message : String(error) },
+      });
+    },
+    sendDisplayState(id, displays) {
+      send({
+        source: 'swarm-sim-bridge',
+        v: 1,
+        type: 'display',
+        ...(id === undefined ? {} : { id }),
+        payload: { displays },
       });
     },
   };

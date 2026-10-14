@@ -27,8 +27,6 @@ let lastCommitAt = 0;
 let commitTimer = null;
 /** Best score reported this session (null until the first Check). */
 let bestScore = null;
-/** True once the student has passed, here or in an earlier session. */
-let hasPassed = false;
 
 /**
  * Search for the SCORM API object in parent frames.
@@ -157,7 +155,11 @@ export function init() {
       hasUncommittedWrites = true;
       commit({ force: true });
     }
-    adoptPreviousResult(currentStatus);
+    const rawScore = api.LMSGetValue('cmi.core.score.raw');
+    const parsedScore = Number(rawScore);
+    if (String(rawScore ?? '').trim() !== '' && Number.isFinite(parsedScore)) {
+      bestScore = clampScore(parsedScore);
+    }
     return true;
   }
 
@@ -165,22 +167,6 @@ export function init() {
   previewMode = true;
   initialized = true;
   return false;
-}
-
-/**
- * Take over the result the LMS already holds, so a returning student cannot
- * have a pass or a best score downgraded by a later failed Check.
- * @param {string} status
- */
-function adoptPreviousResult(status) {
-  const raw = api.LMSGetValue('cmi.core.score.raw');
-  const parsed = Number(raw);
-  if (String(raw ?? '').trim() !== '' && Number.isFinite(parsed)) {
-    bestScore = clampScore(parsed);
-  }
-  if (status === 'passed' || status === 'completed') {
-    hasPassed = true;
-  }
 }
 
 /**
@@ -223,41 +209,25 @@ export function setStatus(status) {
 }
 
 /**
- * Persist the result of a Check and set status based on the pass threshold.
- * Both values are sent in a single commit, which is pushed out immediately:
- * a Check is a deliberate action and each commit is one blocking round-trip.
- *
- * The session keeps its best result. A student who passes and then keeps
- * experimenting must not lose the pass - or the grade - because a later Check
- * failed, which is also how Moodle's recommended "highest grade" method reads
- * the data. The best score of earlier sessions is adopted on init.
- *
+ * Persist the best raw score from a Check and mark the activity completed.
+ * Both values are sent in one forced commit.
  * @param {number} score - 0-100
- * @param {number} passingScore - Minimum score to pass (default 50)
  */
-export function reportScore(score, passingScore = 50) {
+export function reportScore(score) {
   if (!initialized) return;
 
+  const clamped = clampScore(score);
   if (previewMode) {
-    const clamped = clampScore(score);
-    console.log(`[SCORM Preview] Score: ${clamped} → ${clamped >= passingScore ? 'passed' : 'failed'}`);
+    console.log(`[SCORM Preview] Score: ${clamped}`);
     return;
   }
 
-  const clamped = clampScore(score);
   const effective = bestScore === null ? clamped : Math.max(bestScore, clamped);
   bestScore = effective;
-
-  const passed = effective >= passingScore || hasPassed;
-  if (passed) {
-    hasPassed = true;
-  }
-
   writeScore(effective);
-  api.LMSSetValue('cmi.core.lesson_status', passed ? 'passed' : 'failed');
+  api.LMSSetValue('cmi.core.lesson_status', 'completed');
   commit({ force: true });
 }
-
 /**
  * Check whether the SCORM session is live and can accept writes.
  * @returns {boolean}

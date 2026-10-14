@@ -110,7 +110,7 @@ async function reloadScene() {
   if (!currentBundle || !bridgeReady) return;
   try {
     await loadBundleIntoSimulator(currentBundle);
-    setConnectionStatus('Current scene reloaded into the simulator.');
+    setConnectionStatus('Scene restored in the simulator.');
   } catch (error) {
     showToast(`Could not reload scene: ${error instanceof Error ? error.message : String(error)}`, 'error');
   }

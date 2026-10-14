@@ -9,14 +9,27 @@ const CONDITION_SCHEMAS = {
   radio_tx: schema.$defs.radioTx,
   radio_rx: schema.$defs.radioRx,
   sensor_reading: schema.$defs.sensorReading,
+  led_display: schema.$defs.ledDisplay,
+};
+
+const ACTION_SCHEMAS = {
+  radio_broadcast: schema.$defs.actionRadioBroadcast,
+  press_button: schema.$defs.actionPressButton,
+  set_node_level: schema.$defs.actionSetNodeLevel,
+  add_node: schema.$defs.actionAddNode,
 };
 
 const ALLOWED_FIELDS = {
   root: schema.properties,
   metadata: schema.properties.metadata.properties,
   capabilities: schema.properties.capabilities.properties,
+  panel_visibility: schema.properties.panel_visibility.properties,
   evaluation: schema.properties.evaluation.properties,
   testCase: schema.$defs.testCase.properties,
+  testStep: {
+    action: schema.$defs.stepAction.properties,
+    check: schema.$defs.stepCheck.properties,
+  },
   hint: schema.$defs.hint.properties,
   hintTrigger: schema.$defs.hintTrigger.properties,
   condition: Object.fromEntries(
@@ -25,10 +38,20 @@ const ALLOWED_FIELDS = {
       conditionSchema.properties,
     ]),
   ),
+  action: Object.fromEntries(
+    Object.entries(ACTION_SCHEMAS).map(([type, actionSchema]) => [
+      type,
+      actionSchema.properties,
+    ]),
+  ),
   payload: schema.$defs.payloadMatch.properties,
 };
 
 export const VALID_CONDITION_TYPES = Object.keys(CONDITION_SCHEMAS);
+export const VALID_ACTION_TYPES = Object.keys(ACTION_SCHEMAS);
+export const VALID_NODE_TYPES = schema.$defs.actionAddNode.properties.node_type.enum;
+export const VALID_ACTION_BUTTONS = schema.$defs.actionPressButton.properties.button.enum;
+export const VALID_LAYOUT_PATTERN = schema.$defs.ledDisplay.properties.layout.pattern;
 export const VALID_HINT_EVENTS = schema.$defs.hintTrigger.properties.event.enum;
 export const VALID_HINT_DISPLAY_MODES = schema.$defs.hint.properties.display_mode.enum;
 export const VALID_HINT_STYLES = schema.$defs.hint.properties.style.enum;
@@ -59,6 +82,18 @@ export function validateConfig(config) {
       for (const field of Object.keys(ALLOWED_FIELDS.capabilities)) {
         if (config.capabilities[field] !== undefined && typeof config.capabilities[field] !== 'boolean') {
           errors.push({ path: `capabilities.${field}`, message: 'must be a boolean' });
+        }
+      }
+    }
+  }
+  if (config.panel_visibility !== undefined) {
+    if (!isObject(config.panel_visibility)) {
+      errors.push({ path: 'panel_visibility', message: 'must be an object' });
+    } else {
+      rejectUnknown(config.panel_visibility, ALLOWED_FIELDS.panel_visibility, 'panel_visibility', errors);
+      for (const field of Object.keys(ALLOWED_FIELDS.panel_visibility)) {
+        if (config.panel_visibility[field] !== undefined && typeof config.panel_visibility[field] !== 'boolean') {
+          errors.push({ path: `panel_visibility.${field}`, message: 'must be a boolean' });
         }
       }
     }
@@ -129,10 +164,6 @@ function validateMetadata(metadata, errors) {
 
 function validateEvaluation(evaluation, errors) {
   rejectUnknown(evaluation, ALLOWED_FIELDS.evaluation, 'evaluation', errors);
-  if (evaluation.pass_threshold !== undefined &&
-      (!Number.isInteger(evaluation.pass_threshold) || evaluation.pass_threshold < 0 || evaluation.pass_threshold > 100)) {
-    errors.push({ path: 'evaluation.pass_threshold', message: 'must be an integer from 0 to 100' });
-  }
   if (!Array.isArray(evaluation.test_cases)) {
     errors.push({ path: 'evaluation.test_cases', message: 'is required and must be an array' });
   } else if (evaluation.test_cases.length < 1) {
@@ -147,7 +178,6 @@ function validateTestCaseInto(testCase, path, errors) {
   }
   rejectUnknown(testCase, ALLOWED_FIELDS.testCase, path, errors);
   requireString(testCase, 'id', path, errors);
-  if (testCase.type !== 'effect') errors.push({ path: `${path}.type`, message: 'must be "effect"' });
   if (testCase.points !== undefined && (!Number.isInteger(testCase.points) || testCase.points < 0)) {
     errors.push({ path: `${path}.points`, message: 'must be an integer greater than or equal to 0' });
   }
@@ -156,10 +186,120 @@ function validateTestCaseInto(testCase, path, errors) {
       errors.push({ path: `${path}.${field}`, message: 'must be a string' });
     }
   }
-  if (testCase.conditions === undefined) {
-    errors.push({ path: `${path}.conditions`, message: 'is required' });
+  if (!Array.isArray(testCase.trigger)) {
+    errors.push({ path: `${path}.trigger`, message: 'is required and must be an array' });
+  } else if (testCase.trigger.length < 1) {
+    errors.push({ path: `${path}.trigger`, message: 'must contain at least one action' });
   } else {
-    validateConditionInto(testCase.conditions, `${path}.conditions`, errors);
+    testCase.trigger.forEach((action, index) =>
+      validateActionInto(action, `${path}.trigger[${index}]`, errors),
+    );
+  }
+  if (!Array.isArray(testCase.steps)) {
+    errors.push({ path: `${path}.steps`, message: 'is required and must be an array' });
+  } else if (testCase.steps.length < 1) {
+    errors.push({ path: `${path}.steps`, message: 'must contain at least one step' });
+  } else {
+    testCase.steps.forEach((step, index) =>
+      validateStepInto(step, `${path}.steps[${index}]`, errors),
+    );
+  }
+}
+
+function validateActionInto(action, path, errors) {
+  if (!isObject(action)) {
+    errors.push({ path, message: 'must be an object' });
+    return;
+  }
+  const type = action.type;
+  if (!VALID_ACTION_TYPES.includes(type)) {
+    errors.push({ path: `${path}.type`, message: `unknown action type: ${String(type)}` });
+    return;
+  }
+  rejectUnknown(action, ALLOWED_FIELDS.action[type], path, errors);
+
+  if (type === 'radio_broadcast' || type === 'press_button') {
+    validateActionTarget(action.device_id, `${path}.device_id`, 'device', errors);
+  }
+  if (type === 'radio_broadcast') {
+    validateNullableInteger(action.channel, `${path}.channel`, errors);
+    validateNullableInteger(action.group, `${path}.group`, errors);
+    if (action.payload !== undefined && typeof action.payload !== 'string') {
+      errors.push({ path: `${path}.payload`, message: 'must be a string' });
+    }
+  }
+  if (type === 'press_button') {
+    if (action.button !== undefined && !VALID_ACTION_BUTTONS.includes(action.button)) {
+      errors.push({ path: `${path}.button`, message: 'must be "A", "B", or "AB"' });
+    }
+  }
+  if (type === 'radio_broadcast' || type === 'press_button') {
+    validateMinCount(action.count, `${path}.count`, errors);
+    if (action.interval_ms !== undefined && (!Number.isInteger(action.interval_ms) || action.interval_ms < 0)) {
+      errors.push({ path: `${path}.interval_ms`, message: 'must be an integer greater than or equal to 0' });
+    }
+  }
+  if (type === 'set_node_level') {
+    validateActionTarget(action.node_id, `${path}.node_id`, 'node', errors);
+    if (action.value === undefined || !isFiniteNumber(action.value)) {
+      errors.push({ path: `${path}.value`, message: 'is required and must be a finite number' });
+    }
+  }
+  if (type === 'add_node') {
+    if (!VALID_NODE_TYPES.includes(action.node_type)) {
+      errors.push({ path: `${path}.node_type`, message: 'must be "light", "sound", "temperature", or "magnet"' });
+    }
+    for (const field of ['x', 'y']) {
+      if (action[field] === undefined || !isFiniteNumber(action[field])) {
+        errors.push({ path: `${path}.${field}`, message: 'is required and must be a finite number' });
+      }
+    }
+    validateNullableNumber(action.level, `${path}.level`, errors);
+    if (action.duration_seconds !== undefined && !isNonNegativeNumber(action.duration_seconds)) {
+      errors.push({ path: `${path}.duration_seconds`, message: 'must be a non-negative number' });
+    }
+  }
+}
+
+function validateStepInto(step, path, errors) {
+  if (!isObject(step)) {
+    errors.push({ path, message: 'must be an object' });
+    return;
+  }
+  const type = step.type;
+  if (type !== 'action' && type !== 'check') {
+    errors.push({ path: `${path}.type`, message: 'must be "action" or "check"' });
+    return;
+  }
+  rejectUnknown(step, ALLOWED_FIELDS.testStep[type], path, errors);
+  if (type === 'action') {
+    if (step.action === undefined) {
+      errors.push({ path: `${path}.action`, message: 'is required' });
+    } else {
+      validateActionInto(step.action, `${path}.action`, errors);
+    }
+    return;
+  }
+  if (step.condition === undefined) {
+    errors.push({ path: `${path}.condition`, message: 'is required' });
+  } else {
+    validateConditionInto(step.condition, `${path}.condition`, errors);
+  }
+  if (step.timeout_seconds !== undefined && !isNonNegativeNumber(step.timeout_seconds)) {
+    errors.push({ path: `${path}.timeout_seconds`, message: 'must be a non-negative number' });
+  }
+}
+
+function validateActionTarget(value, path, kind, errors) {
+  if (value === undefined || value === null || (typeof value === 'string' && value.trim() === '')) {
+    errors.push({
+      path,
+      message: kind === 'device' ? 'must reference a scene device' : 'must reference a scene node',
+    });
+    return;
+  }
+  if (typeof value !== 'string') {
+    errors.push({ path, message: 'must be a string' });
   }
 }
 
@@ -275,6 +415,13 @@ function validateConditionInto(condition, path, errors) {
           condition.rssi_min > condition.rssi_max) {
         errors.push({ path, message: 'rssi_min must be less than or equal to rssi_max' });
       }
+    }
+    return;
+  }
+
+  if (type === 'led_display') {
+    if (typeof condition.layout !== 'string' || !new RegExp(VALID_LAYOUT_PATTERN).test(condition.layout)) {
+      errors.push({ path: `${path}.layout`, message: 'must be five rows of five characters (#/1 lit, ./0 unlit) separated by newlines' });
     }
     return;
   }

@@ -1,9 +1,15 @@
-const REQUEST_TYPES = { 'load-bundle': true, 'get-bundle': true };
+const REQUEST_TYPES = { 'load-bundle': true, 'get-bundle': true, 'get-display': true };
 const COMMAND_TYPES = {
   'load-bundle': true,
   'get-bundle': true,
   'set-capabilities': true,
   reset: true,
+  'set-ui-visibility': true,
+  'press-button': true,
+  'radio-broadcast': true,
+  'set-node-level': true,
+  'add-node': true,
+  'get-display': true,
 };
 
 export class SimBridgeError extends Error {
@@ -48,7 +54,7 @@ export function connectSimBridge(iframeWindow, targetOrigin) {
       for (const listener of eventListeners) listener(message.payload);
       return;
     }
-    if (message.type !== 'bundle' && message.type !== 'error') return;
+    if (message.type !== 'bundle' && message.type !== 'display' && message.type !== 'error') return;
     if (typeof message.id !== 'string') return;
 
     const request = pending.get(message.id);
@@ -57,6 +63,12 @@ export function connectSimBridge(iframeWindow, targetOrigin) {
     if (message.type === 'error') {
       const detail = isObject(message.payload) ? message.payload.message : message.payload;
       request.reject(new SimBridgeError(typeof detail === 'string' ? detail : 'Simulator bridge request failed'));
+    } else if (message.type === 'display') {
+      if (isObject(message.payload)) {
+        request.resolve(message.payload);
+      } else {
+        request.reject(new SimBridgeError('Simulator returned an invalid display response'));
+      }
     } else if (typeof message.payload === 'string') {
       request.resolve(message.payload);
     } else {
@@ -121,6 +133,24 @@ export function connectSimBridge(iframeWindow, targetOrigin) {
     },
     setCapabilities(capabilities) {
       return sendCommand('set-capabilities', capabilities);
+    },
+    setUiVisibility(visibility) {
+      return sendCommand('set-ui-visibility', visibility);
+    },
+    pressButton(payload) {
+      return sendCommand('press-button', payload);
+    },
+    radioBroadcast(payload) {
+      return sendCommand('radio-broadcast', payload);
+    },
+    setNodeLevel(payload) {
+      return sendCommand('set-node-level', payload);
+    },
+    addNode(payload) {
+      return sendCommand('add-node', payload);
+    },
+    getDisplay() {
+      return request('get-display').then((payload) => payload.displays);
     },
     reset() {
       return sendCommand('reset');
