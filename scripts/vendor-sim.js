@@ -3,23 +3,25 @@ import {
   cpSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-const sourceRoot = resolve(
-  process.env.SWARM_SIM_SRC || join(homedir(), 'Code/microbit/swarm_sim'),
-);
+const sourceOverride = process.env.SWARM_SIM_SRC;
+const simulatorRepo = 'https://github.com/zarify/swarm_sim.git';
+const simulatorTag = 'v0.16.0';
+const simulatorRevision = '971f7fbde2b17703fd53029123062ede9e5284dc';
 const vendorRoot = join(packageRoot, 'vendor/swarm-sim');
 const patchPath = 'sim-patch/edits.patch';
 const remedy =
-  'Set SWARM_SIM_SRC to the path of a swarm_sim Git checkout with a commit, then rerun npm run vendor:sim.';
+  'Check access to the simulator GitHub repository or set SWARM_SIM_SRC to a committed swarm_sim checkout.';
 
 function fail(message) {
   console.error(`vendor:sim: ${message}`);
@@ -94,51 +96,71 @@ function collectFiles(root, current = root, files = []) {
 }
 
 async function main() {
-  if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
-    fail(`Source directory not found: ${sourceRoot}. ${remedy}`);
+  const temporaryRoot = sourceOverride ? null : mkdtempSync(join(tmpdir(), 'scorm-swarm-sim-'));
+  try {
+    const sourceRoot = sourceOverride
+      ? resolve(sourceOverride)
+      : join(temporaryRoot, 'swarm_sim');
+    if (!sourceOverride) {
+      run(
+        'git',
+        ['clone', '--depth', '1', '--branch', simulatorTag, simulatorRepo, sourceRoot],
+        packageRoot,
+        'Cloning upstream simulator',
+      );
+    }
+
+    if (!existsSync(sourceRoot) || !statSync(sourceRoot).isDirectory()) {
+      fail(`Source directory not found: ${sourceRoot}. ${remedy}`);
+    }
+
+    const revisionResult = spawnSync('git', ['-C', sourceRoot, 'rev-parse', '--verify', 'HEAD'], {
+      encoding: 'utf8',
+    });
+    if (revisionResult.status !== 0) {
+      fail(`Source has no readable HEAD commit: ${sourceRoot}. ${remedy}`);
+    }
+    const revision = revisionResult.stdout.trim();
+    if (!sourceOverride && revision !== simulatorRevision) {
+      fail(`Expected ${simulatorTag} at ${simulatorRevision}, got ${revision}.`);
+    }
+
+    rmSync(vendorRoot, { recursive: true, force: true });
+    mkdirSync(vendorRoot, { recursive: true });
+    await archiveCommittedHead(sourceRoot, vendorRoot);
+    writeFileSync(join(vendorRoot, '.source-revision'), `${revision}\n`);
+
+    const patchSource = join(packageRoot, 'sim-patch/src');
+    if (existsSync(patchSource)) cpSync(patchSource, join(vendorRoot, 'src'), { recursive: true });
+
+    const patchCheck = spawnSync('git', ['apply', '--check', patchPath], {
+      cwd: packageRoot,
+      encoding: 'utf8',
+    });
+    if (patchCheck.status !== 0) {
+      fail(
+        `git apply --check failed; rebase ${patchPath} against ${revision} before building.\n${[
+          patchCheck.stdout.trim(),
+          patchCheck.stderr.trim(),
+        ]
+          .filter(Boolean)
+          .join('\n')}`,
+      );
+    }
+    run('git', ['apply', patchPath], packageRoot, 'Applying simulator patch');
+    run('npm', ['ci'], vendorRoot, 'Installing vendored simulator dependencies');
+    run('npm', ['run', 'build'], vendorRoot, 'Building vendored simulator');
+
+    const simDist = join(packageRoot, 'dist/sim');
+    rmSync(simDist, { recursive: true, force: true });
+    mkdirSync(simDist, { recursive: true });
+    cpSync(join(vendorRoot, 'dist'), simDist, { recursive: true });
+    const files = collectFiles(simDist).sort((left, right) => left.localeCompare(right));
+    writeFileSync(join(packageRoot, 'dist/sim-files.json'), `${JSON.stringify(files, null, 2)}\n`);
+    console.log(`Vendored swarm_sim ${revision}; copied ${files.length} files to dist/sim/`);
+  } finally {
+    if (temporaryRoot) rmSync(temporaryRoot, { recursive: true, force: true });
   }
-
-  const revisionResult = spawnSync('git', ['-C', sourceRoot, 'rev-parse', '--verify', 'HEAD'], {
-    encoding: 'utf8',
-  });
-  if (revisionResult.status !== 0) {
-    fail(`Source has no readable HEAD commit: ${sourceRoot}. ${remedy}`);
-  }
-  const revision = revisionResult.stdout.trim();
-
-  rmSync(vendorRoot, { recursive: true, force: true });
-  mkdirSync(vendorRoot, { recursive: true });
-  await archiveCommittedHead(sourceRoot, vendorRoot);
-  writeFileSync(join(vendorRoot, '.source-revision'), `${revision}\n`);
-
-  const patchSource = join(packageRoot, 'sim-patch/src');
-  if (existsSync(patchSource)) cpSync(patchSource, join(vendorRoot, 'src'), { recursive: true });
-
-  const patchCheck = spawnSync('git', ['apply', '--check', patchPath], {
-    cwd: packageRoot,
-    encoding: 'utf8',
-  });
-  if (patchCheck.status !== 0) {
-    fail(
-      `git apply --check failed; rebase ${patchPath} against ${revision} before building.\n${[
-        patchCheck.stdout.trim(),
-        patchCheck.stderr.trim(),
-      ]
-        .filter(Boolean)
-        .join('\n')}`,
-    );
-  }
-  run('git', ['apply', patchPath], packageRoot, 'Applying simulator patch');
-  run('npm', ['ci'], vendorRoot, 'Installing vendored simulator dependencies');
-  run('npm', ['run', 'build'], vendorRoot, 'Building vendored simulator');
-
-  const simDist = join(packageRoot, 'dist/sim');
-  rmSync(simDist, { recursive: true, force: true });
-  mkdirSync(simDist, { recursive: true });
-  cpSync(join(vendorRoot, 'dist'), simDist, { recursive: true });
-  const files = collectFiles(simDist).sort((left, right) => left.localeCompare(right));
-  writeFileSync(join(packageRoot, 'dist/sim-files.json'), `${JSON.stringify(files, null, 2)}\n`);
-  console.log(`Vendored swarm_sim ${revision}; copied ${files.length} files to dist/sim/`);
 }
 
 main().catch((error) => {

@@ -11,7 +11,7 @@ A browser-based activity builder and SCORM 1.2 learning package for activities u
 
 ## Quick start
 
-Requires Node.js and npm. To build the project, first make the simulator available, then build and start the local server:
+Requires Node.js, npm, Git, and network access to GitHub and npm. A clean clone can fetch the pinned simulator source automatically before building:
 
 ```sh
 npm install
@@ -20,7 +20,7 @@ npm run build
 npm run dev
 ```
 
-Open the local address shown by the dev server (port 3000 by default) and use the Activity Builder. The simulator vendoring step uses `~/Code/microbit/swarm_sim` by default; set `SWARM_SIM_SRC` if your simulator checkout is somewhere else.
+`npm run vendor:sim` fetches the public [`swarm_sim`](https://github.com/zarify/swarm_sim) project at `v0.16.0`, applies this repository's simulator patches, and builds the simulator locally. The generated `vendor/` and `dist/` directories are gitignored; no sibling checkout or machine-specific path is needed. To use a local simulator checkout while developing, set `SWARM_SIM_SRC` to its path.
 
 To create a SCORM ZIP from a built package:
 
@@ -32,8 +32,8 @@ The builder can also export a SCORM package directly.
 
 ## Requirements
 
-- Node.js and npm for building and running the project.
-- A Git checkout of the Micro:bit swarm simulator for `npm run vendor:sim`.
+- Node.js, npm, and Git for building and fetching the simulator source.
+- Network access to GitHub and npm for the initial simulator fetch and dependency installation.
 - A browser to use the builder and learner activity.
 - Moodle or another SCORM 1.2-compatible learning platform to host exported packages.
 

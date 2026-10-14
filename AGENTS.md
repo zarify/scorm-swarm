@@ -6,7 +6,7 @@ This repository builds a browser-based activity authoring tool and SCORM 1.2 lea
 
 ## Architecture & Data Flow
 
-- `scripts/vendor-sim.js` vendors the upstream simulator, overlays `sim-patch/src/`, applies `sim-patch/edits.patch`, builds it, and places assets in `dist/sim/`.
+- `scripts/vendor-sim.js` clones upstream `swarm_sim` tag `v0.16.0` by default, overlays `sim-patch/src/`, applies `sim-patch/edits.patch`, builds it, and places assets in `dist/sim/`. Set `SWARM_SIM_SRC` to use a local committed checkout.
 - `scripts/build.js` normalizes and validates activity configuration and scene bundles, bundles builder and learner browser entry points with esbuild, and assembles `dist/` output. The SCORM target needs simulator assets first.
 - `src/activity-builder/` authors configuration and scenarios; browser-side export packages config, manifest, template, and simulator assets.
 - `src/scorm-template/` loads the activity and simulator in an iframe. `src/shared/sim-bridge.js` owns the versioned, origin/source-checked `postMessage` protocol. Simulator events feed `test-runner.js`, `effect-evaluator.js`, and `hint-evaluator.js`.
@@ -37,7 +37,7 @@ npm run test:browser     # builds, then runs Playwright browser suite
 npm run export           # zip previously built SCORM template
 ```
 
-`npm run vendor:sim` defaults to `~/Code/microbit/swarm_sim`; set `SWARM_SIM_SRC` to another committed simulator checkout. It requires Git/tar and runs the vendored project’s `npm ci` and build. Build scripts accept `--target=builder|scorm` (also exposed as npm scripts), and `scripts/build.js` supports `--config=` and `--scene=`. `scripts/make-demo-scene.js` requires `--out <path>` or `--out=<path>`.
+`npm run vendor:sim` clones the pinned public simulator release into a temporary directory by default; set `SWARM_SIM_SRC` to use another committed checkout. It requires Git/network access and runs the vendored project's `npm ci` and build. Build scripts accept `--target=builder|scorm` (also exposed as npm scripts), and `scripts/build.js` supports `--config=` and `--scene=`. `scripts/make-demo-scene.js` requires `--out <path>` or `--out=<path>`.
 
 ## Code Conventions & Common Patterns
 
