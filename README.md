@@ -42,7 +42,21 @@ The learner activity runs in the browser and communicates with the simulator emb
 ## Versioning
 
 The authoring tool's own version is the `version` field in `package.json` (semver,
-shown as `v0.1.0` in the builder header next to the title). `scripts/build.js`
-injects it into the builder bundle at build time — bump `package.json` and rebuild
-to release. It is independent of the vendored simulator version (`v0.16.0`, pinned
-by `scripts/vendor-sim.js`).
+shown as `vX.Y.Z` in the builder header next to the title). `scripts/build.js`
+injects it into the builder bundle at build time. It is independent of the sibling
+tools' versions and of the vendored simulator version (`v0.16.0`, pinned by
+`scripts/vendor-sim.js`); shared fixes are ported as separate commits, never
+version-synced.
+
+Bump rules — the public surface is the builder, `activity_config.json` + `.swarm`
+scenes, and the exported SCORM runtime:
+
+- **Patch** — fixes that cannot change accepted configs or exported packages
+  (UI defects, wording, performance).
+- **Minor** — new builder, test, or runtime capability; previously valid
+  `activity_config.json` and `.swarm` files keep importing, validating, and
+  grading the same.
+- **Major** — released configs or scenes stop importing or validating, or
+  exported SCORM packages change grading semantics.
+
+Release = bump `package.json`, rebuild, commit, tag `vX.Y.Z`.
