@@ -13,6 +13,8 @@ const dist = join(root, 'dist');
 const simDist = join(dist, 'sim');
 const DEFAULT_CONFIG = 'examples/demo-activity.json';
 const DEFAULT_SCENE = 'examples/two-device-demo.swarm';
+// Authoring-tool semver (package.json), injected into the builder bundle.
+const BUILDER_VERSION = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version;
 
 function parseArguments(args) {
   const options = { target: 'all', config: DEFAULT_CONFIG, scene: DEFAULT_SCENE };
@@ -51,7 +53,7 @@ function readScene(path) {
   return bytes;
 }
 
-async function bundle(entry, outfile) {
+async function bundle(entry, outfile, defines = {}) {
   await esbuild.build({
     absWorkingDir: root,
     entryPoints: [entry],
@@ -59,6 +61,7 @@ async function bundle(entry, outfile) {
     format: 'iife',
     target: ['es2022'],
     outfile,
+    define: defines,
     sourcemap: false,
     legalComments: 'none',
   });
@@ -85,7 +88,9 @@ async function buildBuilder() {
   mkdirSync(join(output, 'css'), { recursive: true });
   copyIfPresent(join(source, 'activity-builder/index.html'), join(output, 'index.html'));
   copyIfPresent(join(source, 'activity-builder/css/builder.css'), join(output, 'css/builder.css'));
-  await bundle('src/activity-builder/js/app.js', join(output, 'js/app.bundle.js'));
+  await bundle('src/activity-builder/js/app.js', join(output, 'js/app.bundle.js'), {
+    __BUILDER_VERSION__: JSON.stringify(BUILDER_VERSION),
+  });
   copySimulator(output);
   console.log(`Built authoring builder at ${output}`);
 }

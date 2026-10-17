@@ -8,6 +8,9 @@ import { initTestsTab } from './tests-tab.js';
 import { initPreviewTab } from './preview-tab.js';
 import { exportJSON, exportSCORM } from './export.js';
 
+// Authoring-tool semver, injected from package.json by scripts/build.js.
+const BUILDER_VERSION = typeof __BUILDER_VERSION__ === 'string' ? __BUILDER_VERSION__ : '0.0.0-dev';
+
 const configListeners = new Set();
 const sceneListeners = new Set();
 const state = {
@@ -173,9 +176,18 @@ function formatValidationErrors(errors) {
   return `Fix ${errors.length} config error(s) before export. ${first.join('; ')}${more}`;
 }
 
+/** Show the authoring-tool version (semver from package.json) in the header. */
+function initVersionBadge() {
+  const badge = document.getElementById('builder-version');
+  if (!badge) return;
+  badge.textContent = `v${BUILDER_VERSION}`;
+  badge.title = `Activity builder version ${BUILDER_VERSION}`;
+}
+
 function init() {
   setupTabs();
   setupHeaderActions();
+  initVersionBadge();
   initConfigTab();
   initScenarioTab();
   initHintsTab();

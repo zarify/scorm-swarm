@@ -38,3 +38,11 @@ The builder can also export a SCORM package directly.
 - Moodle or another SCORM 1.2-compatible learning platform to host exported packages.
 
 The learner activity runs in the browser and communicates with the simulator embedded in the page. No project-specific Moodle plugin is needed.
+
+## Versioning
+
+The authoring tool's own version is the `version` field in `package.json` (semver,
+shown as `v0.1.0` in the builder header next to the title). `scripts/build.js`
+injects it into the builder bundle at build time — bump `package.json` and rebuild
+to release. It is independent of the vendored simulator version (`v0.16.0`, pinned
+by `scripts/vendor-sim.js`).
