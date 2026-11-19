@@ -66,3 +66,4 @@ Use npm and Node.js for root scripts; the root package is private and ES-module 
 - `npm run test:browser` builds first, then runs Playwright tests under `test/browser/` against the browser runtime and fixtures. A usable Chromium/headless-shell executable is required by the browser suite.
 - The root package defines no lint, formatter, or CI command. The vendored simulator has separate tests/typecheck/E2E commands; those are not the root application suite.
 - For behavioral changes, cover relevant boundaries and integration contracts, especially config-schema/normalizer/validator agreement, bridge protocol behavior, and persistence/LMS outcomes. Run the specific root suite and browser suite when the changed path requires a real browser.
+
