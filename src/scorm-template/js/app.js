@@ -21,7 +21,7 @@ let runner;
 let hintState;
 let bridge;
 let bridgeReady = false;
-let eventLog = [];
+let checkErrorShown = false;
 let hintTimer;
 let terminated = false;
 let runActive = false;
@@ -55,7 +55,7 @@ async function startActivity() {
     });
     const restored = await persistence.restore();
     const restoredSceneBase64 = restored.state?.scene_bundle_base64 || null;
-    renderActivityHeader();
+    renderInstructions();
     renderChecklist();
     renderHints();
     document.getElementById('btn-check').addEventListener('click', () => void runChecks());
@@ -89,9 +89,8 @@ async function startActivity() {
   }
 }
 
-function renderActivityHeader() {
+function renderInstructions() {
   document.title = config.metadata.title || 'Swarm activity';
-  document.getElementById('activity-title').textContent = config.metadata.title || 'Swarm activity';
   document.getElementById('instructions-content').innerHTML = renderInlineMarkdown(
     config.metadata.instructions_markdown || 'Explore the scene and look for evidence of the system at work.',
   );
@@ -121,7 +120,6 @@ async function connectSimulator(restoredSceneBase64 = null) {
   if (restoredSceneBase64) {
     await connectingBridge.loadBundle(restoredSceneBase64);
   }
-  document.getElementById('simulator-status').textContent = 'Connected';
 }
 
 /** Cache the simulator's current scene bundle. Deliberately saves nothing. */
@@ -186,9 +184,6 @@ function handleSimulatorEvent(payload) {
     renderHints();
     scheduleSceneCacheSave();
   }
-  eventLog.push(payload);
-  if (eventLog.length > 200) eventLog.shift();
-  renderEventLog();
   hintDebouncer.push({ type: 'sim_event', payload });
 }
 
@@ -205,6 +200,7 @@ async function runChecks() {
   button.disabled = true;
   button.textContent = 'Running…';
   runProgress = new Map();
+  if (checkErrorShown) clearStatus();
   recordCheckAttempt(hintState);
   try {
     const outcome = await runner.runAll({ onProgress: renderRunProgress });
@@ -215,14 +211,13 @@ async function runChecks() {
     }
     scorm.reportScore(outcome.score);
     renderChecklist(outcome.results, { showFeedback: true });
-    document.getElementById('score-display').textContent = `${outcome.score}%`;
-    setStatus(`${outcome.earnedPoints} of ${outcome.totalPoints} points`, 'info');
     evaluateHintEvent({
       type: 'test_fail',
       failedCheckCount: outcome.results.filter((result) => !result.passed).length,
     });
   } catch (error) {
     setStatus(`Test run failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    checkErrorShown = true;
   } finally {
     runActive = false;
     button.disabled = false;
@@ -234,17 +229,14 @@ async function resetSession() {
   runner?.cancel();
   grader.reset();
   hintState = createHintState();
-  eventLog = [];
   runProgress.clear();
   hintDebouncer.cancel();
   clearTimeout(hintTimer);
   hintTimer = undefined;
   clearTimeout(sceneSaveTimer);
   sceneSaveTimer = null;
-  renderEventLog();
   renderChecklist();
   renderHints();
-  document.getElementById('score-display').textContent = '—';
   setStatus('Session evidence reset. The scene remains loaded.', 'info');
   if (persistence) {
     try {
@@ -324,25 +316,6 @@ function renderChecklist(results = [], { showFeedback = false, progress = runPro
   document.getElementById('check-count').textContent = `${passed} / ${config.evaluation.test_cases.length}`;
 }
 
-function renderEventLog() {
-  const list = document.getElementById('event-log');
-  list.replaceChildren();
-  document.getElementById('event-count').textContent = String(eventLog.length);
-  if (eventLog.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'event-log-empty';
-    empty.textContent = 'No simulation effects yet.';
-    list.append(empty);
-    return;
-  }
-  for (const payload of eventLog.slice(-80).reverse()) {
-    const line = document.createElement('li');
-    line.dataset.kind = payload.event.kind;
-    line.textContent = formatEvent(payload);
-    list.append(line);
-  }
-}
-
 function renderHints(result = evaluateHints(config.hints, hintState, { type: 'timer' }, grader.evaluate)) {
   const list = document.getElementById('hint-list');
   const requestButton = document.getElementById('btn-request-hint');
@@ -374,25 +347,19 @@ function renderHints(result = evaluateHints(config.hints, hintState, { type: 'ti
   }
 }
 
-function formatEvent(payload) {
-  const event = payload.event;
-  switch (event.kind) {
-    case 'serial': return `${event.device_id} · serial: ${event.text}`;
-    case 'button': return `${event.device_id} · ${event.button} ${event.pressed ? 'pressed' : 'released'}`;
-    case 'radio-tx': return `${event.device_id} · radio TX · group ${event.packet.group ?? '—'} · channel ${event.packet.channel ?? '—'}`;
-    case 'radio-rx': return `${event.device_id} ← ${event.from_device_id} · radio RX · RSSI ${event.rssi}`;
-    case 'radio-blocked': return `${event.device_id} · radio blocked · ${event.reason}`;
-    case 'sensor': return `${event.device_id} · ${event.sensor}: ${event.value}`;
-    case 'display': return `${event.device_id} · display ${event.pixels.filter((pixel) => pixel > 0).length} lit`;
-    case 'code-load': return `${event.device_id} · program loaded; evidence reset`;
-    default: return event.kind;
-  }
-}
-
 function setStatus(message, kind) {
   const status = document.getElementById('status-bar');
   status.textContent = message;
   status.className = `status-bar status-${kind}`;
+  checkErrorShown = false;
+}
+
+/** Drop a stale Check failure so the next run starts from a clean live region. */
+function clearStatus() {
+  const status = document.getElementById('status-bar');
+  status.textContent = '';
+  status.className = 'status-bar status-info';
+  checkErrorShown = false;
 }
 function finishSession() {
   if (terminated) return;

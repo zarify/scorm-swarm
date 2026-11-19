@@ -2,7 +2,7 @@
   "metadata": {
     "activity_id": "demo-activity",
     "title": "Radio Relay Field Lab",
-    "instructions_markdown": "Watch **Alice** announce her message and send radio packets. Use the event log to see what **Bob** receives, then select Check to run the scripted tests; they inject Alice's A press.\n\nThe scene is fixed in place; focus on the effects, not the program text.",
+    "instructions_markdown": "Watch **Alice** announce her message and send radio packets. Open **Bob's Radio inspector** to see what **Bob** receives, then select Check to run the scripted tests; they inject Alice's A press.\n\nThe scene is fixed in place; focus on the effects, not the program text.",
     "learning_objectives_markdown": "- Distinguish serial output from radio transmission.\n- Explain how radio group settings affect delivery.",
     "teacher_notes_markdown": "The demo scene configures Bob as a group 42 receiver before Alice starts transmitting."
   },
@@ -62,7 +62,7 @@
         "id": "bob-hears-ping",
         "points": 1,
         "feedback_on_pass": "Bob received Alice's \"ping\" on radio group 42.",
-        "feedback_on_fail": "Check the radio log: Bob should receive Alice's \"ping\" on group 42.",
+        "feedback_on_fail": "Open Bob's Radio inspector: he should receive Alice's \"ping\" on group 42.",
         "trigger": [
           { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
         ],

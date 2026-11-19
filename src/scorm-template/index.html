@@ -9,17 +9,6 @@
 </head>
 <body>
   <div id="app">
-    <header class="activity-header">
-      <div class="activity-title-lockup">
-        <span class="brand-mark" aria-hidden="true"><span></span><span></span><span></span></span>
-        <div>
-          <p class="eyebrow">Micro:bit swarm activity</p>
-          <h1 id="activity-title">Loading activity…</h1>
-        </div>
-      </div>
-      <div id="status-bar" class="status-bar status-info" role="status" aria-live="polite">Starting learner session…</div>
-    </header>
-
     <section class="instruction-strip">
       <article id="instructions-panel" class="instruction-panel">
         <p class="eyebrow">Your mission</p>
@@ -34,30 +23,18 @@
 
     <main class="activity-layout">
       <section class="simulator-panel" aria-label="Swarm simulation">
-        <div class="simulator-heading"><p class="eyebrow">Simulation / learner mode</p><span id="simulator-status" class="simulator-status">Connecting…</span></div>
         <iframe id="simulator-frame" title="Interactive micro:bit swarm simulation" src="about:blank"></iframe>
       </section>
-      <aside class="activity-sidebar">
-        <section class="learner-panel event-panel">
-          <div class="panel-title-row"><div><p class="eyebrow">What happened</p><h2>Event log</h2></div><span id="event-count" class="count-badge">0</span></div>
-          <ol id="event-log" class="event-log"><li class="event-log-empty">No simulation effects yet.</li></ol>
-        </section>
-        <section class="learner-panel checklist-panel">
-          <div class="panel-title-row"><div><p class="eyebrow">Evidence to collect</p><h2>Test checklist</h2></div><span id="check-count" class="count-badge">0 / 0</span></div>
-          <div id="test-checklist" class="test-checklist"><p class="empty-note">Loading tests…</p></div>
-          <div id="check-feedback" class="check-feedback" aria-live="polite"></div>
-        </section>
+      <aside class="checklist-panel" aria-label="Test checklist">
+        <div class="panel-title-row"><div><p class="eyebrow">Evidence to collect</p><h2>Test checklist</h2></div><span id="check-count" class="count-badge">0 / 0</span></div>
+        <div id="test-checklist" class="test-checklist"><p class="empty-note">Loading tests…</p></div>
+        <div class="checklist-actions">
+          <button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button>
+          <button id="btn-check" class="btn btn-primary" type="button">Check</button>
+        </div>
+        <div id="status-bar" class="status-bar status-info" role="status" aria-live="polite">Starting learner session…</div>
       </aside>
     </main>
-
-    <footer class="activity-footer">
-      <div class="footer-score"><span class="eyebrow">Current score</span><strong id="score-display">—</strong></div>
-      <div class="footer-actions">
-        <button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button>
-        <button id="btn-check" class="btn btn-primary" type="button">Check</button>
-      </div>
-      <p id="pass-status" class="pass-status">Complete the simulation, then check your evidence.</p>
-    </footer>
   </div>
   <script defer src="js/app.bundle.js"></script>
 </body>

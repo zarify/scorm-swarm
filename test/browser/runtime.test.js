@@ -52,18 +52,19 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
     undefined,
     { timeout: 20_000 },
   );
-  assert.equal(await page.textContent('#activity-title'), 'Radio Relay Field Lab');
+  assert.equal(await page.title(), 'Radio Relay Field Lab');
   assert.match(await page.textContent('#instructions-content'), /Alice/);
   await page.waitForFunction(
-    () => [...document.querySelectorAll('#event-log li')].some((line) => line.textContent.includes('hello 42')) &&
-      [...document.querySelectorAll('#event-log li')].some((line) => line.textContent.includes('radio RX')),
+    () => [...document.querySelectorAll('#hint-list .hint-card')]
+      .some((card) => card.textContent.includes("Alice's serial message confirms that her program started.")),
     undefined,
     { timeout: 10_000 },
   );
-  await page.waitForSelector('#hint-list .hint-card', { timeout: 5_000 });
+  assert.equal(await page.locator('.checklist-panel #btn-check').count(), 1, 'Check lives in the checklist panel');
+  assert.equal(await page.locator('.checklist-panel #btn-reset-session').count(), 1, 'Reset lives in the checklist panel');
 
   await page.click('#btn-check');
-  await page.waitForFunction(() => document.getElementById('score-display')?.textContent === '100%');
+  await page.waitForFunction(() => document.getElementById('check-count')?.textContent.trim() === '3 / 3');
   let model = await readLmsModel(page);
   assert.equal(model['cmi.core.score.raw'], '100');
   assert.equal(model['cmi.core.score.min'], '0');
@@ -75,7 +76,15 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
   assert.ok(simulatorFrame, 'learner simulator iframe should be present');
   await simulatorFrame.locator('#stub-mode').uncheck();
   await page.click('#btn-check');
-  await page.waitForFunction(() => document.getElementById('score-display')?.textContent === '75%');
+  await page.waitForFunction(() => document.getElementById('check-count')?.textContent.trim() === '2 / 3');
+  const secondRun = await page.$$eval('#test-checklist .test-row', (rows) =>
+    rows.map((row) => [row.dataset.status, row.querySelector('strong')?.textContent]),
+  );
+  assert.deepEqual(secondRun, [
+    ['failed', 'button-a-serial'],
+    ['passed', 'button-a-display'],
+    ['passed', 'bob-hears-ping'],
+  ]);
   model = await readLmsModel(page);
   assert.equal(model['cmi.core.score.raw'], '100', 'a lower Check cannot downgrade the session best');
   assert.equal(model['cmi.core.lesson_status'], 'completed');

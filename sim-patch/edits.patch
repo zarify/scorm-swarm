@@ -1,5 +1,5 @@
 diff --git a/vendor/swarm-sim/src/App.tsx b/vendor/swarm-sim/src/App.tsx
-index 7084953..1b6040f 100644
+index 7084953..f7dcb9d 100644
 --- a/vendor/swarm-sim/src/App.tsx
 +++ b/vendor/swarm-sim/src/App.tsx
 @@ -1,9 +1,26 @@
@@ -19,8 +19,9 @@ index 7084953..1b6040f 100644
  export function App() {
 +  const launchConfig = readLaunchConfig(window.location.href);
    return (
-     <main className="app-shell">
+-    <main className="app-shell">
 -      <SwarmCanvasPanel />
++    <main className={launchConfig.learnerMode ? 'app-shell app-shell--learner' : 'app-shell'}>
 +      <SwarmCanvasPanel
 +        learnerMode={launchConfig.learnerMode}
 +        bundlePath={launchConfig.bundlePath}
@@ -189,10 +190,10 @@ index 562b1eb..9c4126a 100644
    );
  
 diff --git a/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx b/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
-index a523b5f..6861f53 100644
+index a523b5f..af9a534 100644
 --- a/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
 +++ b/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
-@@ -1,8 +1,9 @@
+@@ -1,8 +1,11 @@
 -import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 +import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
  import { unzipSync } from 'fflate';
@@ -200,10 +201,12 @@ index a523b5f..6861f53 100644
  import { vi } from 'vitest';
  import type { MicroPythonRuntimeHostProps, RoutedRadioDelivery } from './MicroPythonRuntimeHost';
 +import type { BridgeCommand, SimLearnerBridge } from '../learnerBridge';
++import { base64ToBytes } from '../learnerBridge';
++import { decodeProjectBundle } from '../domain/projectBundle';
  const workingCopyStorageState = vi.hoisted(() => ({
    items: new Map<string, string>(),
    loadErrorMessage: undefined as string | undefined,
-@@ -57,7 +58,69 @@ import {
+@@ -57,7 +60,73 @@ import {
    encodeMicroPythonRadioString,
  } from '../runtime/micropythonIframeAdapter';
  
@@ -211,6 +214,7 @@ index a523b5f..6861f53 100644
 +  const handlers = new Set<(command: BridgeCommand) => void | Promise<void>>();
 +  const displayResponses: Array<{ id: string | undefined; displays: Record<string, number[]> }> = [];
 +  const ackedIds: Array<string | undefined> = [];
++  const bundleResponses: Array<{ id: string | undefined; base64: string }> = [];
 +  const positionResponses: Array<{
 +    id: string | undefined;
 +    positions: Array<{ kind: 'device' | 'source'; id: string; x: number; y: number }>;
@@ -221,7 +225,9 @@ index a523b5f..6861f53 100644
 +      handlers.add(handler);
 +      return () => { handlers.delete(handler); };
 +    },
-+    sendBundle() {},
++    sendBundle(id, base64) {
++      bundleResponses.push({ id, base64 });
++    },
 +    sendError(id, error) {
 +      errorResponses.push({
 +        id,
@@ -243,6 +249,7 @@ index a523b5f..6861f53 100644
 +    bridge,
 +    displayResponses,
 +    ackedIds,
++    bundleResponses,
 +    positionResponses,
 +    async dispatch(command: BridgeCommand) {
 +      await Promise.all([...handlers].map((handler) => handler(command)));
@@ -273,7 +280,41 @@ index a523b5f..6861f53 100644
    beforeEach(() => {
      if (typeof window.localStorage?.clear === 'function') {
        window.localStorage.clear();
-@@ -109,8 +172,10 @@ describe('SwarmCanvasPanel', () => {
+@@ -81,6 +150,33 @@ describe('SwarmCanvasPanel', () => {
+     return screen.getAllByRole('button', { name: /^Reset$/ })[0]!;
+   }
+ 
++  /** The selected device's code filename in the compact selection strip. */
++  function getCodeName() {
++    return document.querySelector('.selection-code__name');
++  }
++
++  async function waitForCodeName(name: string) {
++    await waitFor(() => expect(getCodeName()).toHaveTextContent(name));
++  }
++
++  function getRuntimeLogDialog() {
++    return document.querySelector('#runtime-log-dialog') as HTMLDialogElement | null;
++  }
++
++  function getRadioInspectorDialog() {
++    return document.querySelector('#radio-inspector-dialog') as HTMLDialogElement | null;
++  }
++
++  /** Open the selected device's Runtime log modal and return its element. */
++  function openRuntimeLogPanel() {
++    fireEvent.click(screen.getByRole('button', { name: 'Runtime log' }));
++    const dialog = getRuntimeLogDialog();
++    if (!dialog) {
++      throw new Error('Runtime log dialog is not mounted');
++    }
++    return dialog;
++  }
++
+   function addDeviceFromSwarmTools() {
+     openSwarmTools();
+     fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
+@@ -109,8 +205,10 @@ describe('SwarmCanvasPanel', () => {
      setAddLockedMode(false);
    }
  
@@ -286,7 +327,7 @@ index a523b5f..6861f53 100644
        configurable: true,
        value: () => ({
          x: 0,
-@@ -151,6 +216,108 @@ describe('SwarmCanvasPanel', () => {
+@@ -151,6 +249,131 @@ describe('SwarmCanvasPanel', () => {
      expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
    });
  
@@ -300,7 +341,7 @@ index a523b5f..6861f53 100644
 +    expect(screen.getByRole('button', { name: 'Radio inspector' })).toBeInTheDocument();
 +    expect(container.querySelector('#radio-inspector-dialog')).toBeInTheDocument();
 +    expect(container.querySelector('.radio-summary')).toBeInTheDocument();
-+    expect(container.querySelector('.device-log')).not.toBeInTheDocument();
++    expect(getRuntimeLogDialog()).not.toBeInTheDocument();
 +    expect(screen.queryByRole('button', { name: 'Debug' })).not.toBeInTheDocument();
 +    expect(container.querySelector('#debug-tools-modal')).toHaveClass('debug-modal--hidden');
 +
@@ -323,9 +364,32 @@ index a523b5f..6861f53 100644
 +    expect(screen.queryByRole('button', { name: 'Radio inspector' })).not.toBeInTheDocument();
 +    expect(container.querySelector('#radio-inspector-dialog')).not.toBeInTheDocument();
 +    expect(container.querySelector('.radio-summary')).not.toBeInTheDocument();
-+    expect(container.querySelector('.device-log')).toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'Runtime log' })).toBeInTheDocument();
++    const runtimeLogDialog = getRuntimeLogDialog();
++    expect(runtimeLogDialog).toBeInTheDocument();
++    expect(runtimeLogDialog).not.toHaveAttribute('open');
++    fireEvent.click(screen.getByRole('button', { name: 'Runtime log' }));
++    expect(runtimeLogDialog).toHaveAttribute('open');
++    fireEvent.click(screen.getByRole('button', { name: 'Close runtime log' }));
++    expect(runtimeLogDialog).not.toHaveAttribute('open');
++    expect(screen.getByRole('button', { name: 'Runtime log' })).toHaveFocus();
 +    fireEvent.click(screen.getByRole('button', { name: 'Debug' }));
 +    expect(container.querySelector('#debug-tools-modal')).not.toHaveClass('debug-modal--hidden');
++
++    await act(async () => {
++      await harness.dispatch({
++        type: 'set-ui-visibility',
++        payload: {
++          debug_panel: false,
++          radio_inspector: false,
++          runtime_log: false,
++          environment_values: false,
++          panel_header: true,
++        },
++      });
++    });
++    expect(screen.queryByRole('button', { name: 'Runtime log' })).not.toBeInTheDocument();
++    expect(getRuntimeLogDialog()).not.toBeInTheDocument();
 +  });
 +
 +  it('injects button presses into the selected runtime input state', async () => {
@@ -395,8 +459,282 @@ index a523b5f..6861f53 100644
    it('uses compact glyph controls with tooltips in the header and canvas-state menu', () => {
      render(<SwarmCanvasPanel />);
  
-@@ -646,10 +813,11 @@ describe('SwarmCanvasPanel', () => {
-     expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
+@@ -258,8 +481,10 @@ describe('SwarmCanvasPanel', () => {
+     addLockedDeviceFromSwarmTools();
+ 
+     expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
+-    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
+-    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
++    const lockedBadge = screen.getByText('Locked', { selector: '.selection-name-badge' });
++    expect(lockedBadge).toHaveAccessibleName(/Locked device/);
++    expect(lockedBadge.getAttribute('title')).toMatch(/uploads and code edits stay locked/);
++    expect(getCodeName()).toHaveTextContent('No code');
+   });
+ 
+   it('supports toggleable pinning for regular devices and permanent pinning for locked devices', () => {
+@@ -281,23 +506,15 @@ describe('SwarmCanvasPanel', () => {
+ 
+     expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
+     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
+-    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
++    expect(
++      screen.getByText('Locked', { selector: '.selection-name-badge' }).getAttribute('title'),
++    ).toMatch(/uploads and code edits stay locked/);
+     expect(
+       screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
+     ).not.toBeInTheDocument();
+   });
+ 
+-  it('shows concise code lock copy for locked devices before their first upload', () => {
+-    render(<SwarmCanvasPanel />);
+-
+-    addLockedDeviceFromSwarmTools();
+-
+-    expect(screen.getByText('Code locked after first upload')).toBeInTheDocument();
+-    expect(screen.queryByText('The first successful code upload will be its only assignment.')).not.toBeInTheDocument();
+-    expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
+-  });
+-
+-  it('shows concise property lock copy for locked light sources', () => {
++  it('keeps the locked light source properties editable until the source is permanently pinned', () => {
+     if (!FEATURE_FLAGS.light) {
+       return;
+     }
+@@ -309,8 +526,9 @@ describe('SwarmCanvasPanel', () => {
+     setAddLockedMode(false);
+ 
+     expect(container.querySelectorAll('.source-node--light')).toHaveLength(1);
+-    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
+-    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
++    expect(
++      screen.getByText('Locked', { selector: '.selection-name-badge' }).getAttribute('title'),
++    ).toMatch(/source properties stay locked/);
+     expect(screen.getByLabelText('Radius')).toBeEnabled();
+     expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeEnabled();
+     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
+@@ -321,24 +539,9 @@ describe('SwarmCanvasPanel', () => {
+     expect(screen.getByLabelText('Radius')).toBeDisabled();
+     expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeDisabled();
+     expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
+-    expect(screen.getByText('Properties locked')).toBeInTheDocument();
+-    expect(screen.queryByText('Keep this locked node fixed in place on the canvas.')).not.toBeInTheDocument();
+-    expect(screen.queryByText('This is permanent once applied.')).not.toBeInTheDocument();
+-    expect(screen.queryByText('This node is locked in place and its properties cannot be changed.')).not.toBeInTheDocument();
+-  });
+-
+-  it('shows concise property lock copy for locked sound sources', () => {
+-    if (!FEATURE_FLAGS.sound) {
+-      return;
+-    }
+-
+-    render(<SwarmCanvasPanel />);
+-
+-    setAddLockedMode(true);
+-    fireEvent.click(screen.getByRole('button', { name: 'Add sound' }));
+-    setAddLockedMode(false);
+-
+-    expect(screen.getByText('Properties unlocked')).toBeInTheDocument();
++    expect(
++      screen.queryByText('This node is locked in place and its properties cannot be changed.'),
++    ).not.toBeInTheDocument();
+   });
+ 
+   it('shows temperature source controls and device temperature readings', () => {
+@@ -493,8 +696,11 @@ describe('SwarmCanvasPanel', () => {
+     expect(screen.queryByText('Runtime group')).not.toBeInTheDocument();
+     expect(screen.queryByText('Runtime channel')).not.toBeInTheDocument();
+     expect(screen.queryByText('Not exposed')).not.toBeInTheDocument();
+-    expect(screen.getByLabelText('Event log for Node 1')).not.toHaveAttribute('open');
+-    expect(screen.getByLabelText('Radio message inspector')).not.toHaveAttribute('open');
++    expect(getRuntimeLogDialog()).not.toHaveAttribute('open');
++    expect(getRadioInspectorDialog()).not.toHaveAttribute('open');
++    expect(screen.getByRole('button', { name: 'Upload code' })).toHaveAttribute('title', 'Upload code');
++    expect(screen.getByRole('button', { name: 'Reset device' })).toBeDisabled();
++    expect(screen.queryByRole('button', { name: 'Unload code' })).not.toBeInTheDocument();
+   });
+ 
+   it('assigns uploaded code to the selected device without showing MicroPython host chrome', async () => {
+@@ -505,10 +711,11 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [file] },
+     });
+ 
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
+-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
++    await waitForCodeName('mp.hex');
+     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+     expect(screen.queryByLabelText('MakeCode runtime host')).not.toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'Reset device' })).toBeEnabled();
++    expect(screen.getByRole('button', { name: 'Unload code' })).toBeInTheDocument();
+     expect(screen.getAllByRole('button', { name: /^Reset$/ })[0]!).toBeEnabled();
+   });
+ 
+@@ -520,9 +727,12 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [file] },
+     });
+ 
+-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
++    await waitFor(() => expect(screen.getByRole('button', { name: 'Edit code' })).toBeEnabled(), {
+       timeout: 12000,
+     });
++    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
++    expect(screen.getByLabelText('Editing main.ts for Node 1')).toBeInTheDocument();
++    fireEvent.click(screen.getByRole('button', { name: 'Close code editor' }));
+     expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
+     expect(screen.queryByLabelText('MakeCode simulator for Node 1')).not.toBeInTheDocument();
+     expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
+@@ -547,7 +757,7 @@ describe('SwarmCanvasPanel', () => {
+     await waitFor(() =>
+       expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
+     );
+-    expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready');
++    expect(getCodeName()).toHaveTextContent('mp.hex');
+ 
+     fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
+@@ -573,7 +783,7 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+       target: { files: [sharedFile] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
++    await waitForCodeName('shared.hex');
+ 
+     fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
+       button: 0,
+@@ -584,7 +794,7 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [sharedFile] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: shared.hex')).toBeInTheDocument());
++    await waitForCodeName('shared.hex');
+ 
+     fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
+       button: 0,
+@@ -610,6 +820,100 @@ describe('SwarmCanvasPanel', () => {
+     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
+   });
+ 
++  it('unloads one device code assignment without deleting the node or a shared artifact', async () => {
++    Object.defineProperty(SVGSVGElement.prototype, 'setPointerCapture', {
++      configurable: true,
++      value: () => {},
++    });
++    Object.defineProperty(SVGSVGElement.prototype, 'releasePointerCapture', {
++      configurable: true,
++      value: () => {},
++    });
++    Object.defineProperty(SVGSVGElement.prototype, 'hasPointerCapture', {
++      configurable: true,
++      value: () => false,
++    });
++    const harness = createBridgeHarness();
++    const { container } = render(<SwarmCanvasPanel bridge={harness.bridge} />);
++    addDeviceFromSwarmTools();
++
++    const sharedFile = makeUploadFile('shared.hex', makeMicroPythonHex('radio.send("shared")'));
++    fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
++      target: { files: [sharedFile] },
++    });
++    await waitForCodeName('shared.hex');
++    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
++      button: 0,
++      pointerId: 1,
++      clientX: 0,
++      clientY: 0,
++    });
++    fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
++      target: { files: [sharedFile] },
++    });
++    await waitForCodeName('shared.hex');
++
++    // A saved source edit on the device that is about to lose its assignment.
++    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
++    fireEvent.change(screen.getByLabelText('Editing main.py for Node 1'), {
++      target: { value: 'radio.send("node-1")\n' },
++    });
++    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
++    await waitFor(() =>
++      expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
++    );
++
++    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
++    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
++    expect(confirmSpy).toHaveBeenCalledTimes(1);
++    expect(confirmSpy.mock.calls[0]?.[0]).toBe(
++      'Unload shared.hex from Node 1? Saved code edits for this device will be removed.',
++    );
++    expect(getCodeName()).toHaveTextContent('shared.hex');
++    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
++
++    confirmSpy.mockReturnValue(true);
++    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
++    await waitFor(() => expect(getCodeName()).toHaveTextContent('No code'));
++    expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
++    expect(screen.getByRole('button', { name: 'Upload code' })).toHaveFocus();
++    expect(screen.getByRole('button', { name: 'Reset device' })).toBeDisabled();
++
++    await act(async () => {
++      await harness.dispatch({ type: 'get-bundle', id: 'unload-bundle-1' });
++    });
++    const firstReply = harness.bundleResponses.at(-1);
++    expect(firstReply?.id).toBe('unload-bundle-1');
++    const unloaded = await decodeProjectBundle(base64ToBytes(firstReply!.base64));
++    const unloadedNode = unloaded.devices.find((device) => device.id === 'device-1');
++    const keeperNode = unloaded.devices.find((device) => device.id === 'device-2');
++    expect(unloadedNode?.programArtifactId).toBeUndefined();
++    expect(unloadedNode?.editableProgram).toBeUndefined();
++    expect(keeperNode?.programArtifactId).toBeTruthy();
++    expect(unloaded.artifacts.filter((artifact) => artifact.id === keeperNode?.programArtifactId)).toHaveLength(1);
++
++    fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
++      button: 0,
++      pointerId: 2,
++      clientX: 0,
++      clientY: 0,
++    });
++    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
++    expect(screen.getByLabelText('Editing main.py for Node 2')).toHaveValue('radio.send("shared")');
++    fireEvent.click(screen.getByRole('button', { name: 'Close code editor' }));
++
++    fireEvent.click(screen.getByRole('button', { name: 'Unload code' }));
++    await waitFor(() => expect(getCodeName()).toHaveTextContent('No code'));
++    await act(async () => {
++      await harness.dispatch({ type: 'get-bundle', id: 'unload-bundle-2' });
++    });
++    const secondReply = harness.bundleResponses.at(-1);
++    expect(secondReply?.id).toBe('unload-bundle-2');
++    const fullyUnloaded = await decodeProjectBundle(base64ToBytes(secondReply!.base64));
++    expect(fullyUnloaded.artifacts).toHaveLength(0);
++    confirmSpy.mockRestore();
++  });
++
+   it('rejects unextractable HEX uploads', async () => {
+     render(<SwarmCanvasPanel />);
+ 
+@@ -623,10 +927,8 @@ describe('SwarmCanvasPanel', () => {
+         screen.getByText('No embedded MicroPython or MakeCode source found in HEX artifact'),
+       ).toBeInTheDocument(),
+     );
+-    expect(screen.getByText('No code assigned yet')).toBeInTheDocument();
+-    expect(
+-      screen.queryByText('Assigned: unknown.hex'),
+-    ).not.toBeInTheDocument();
++    expect(getCodeName()).toHaveTextContent('No code');
++    expect(getCodeName()).not.toHaveTextContent('unknown.hex');
+   });
+ 
+   it('keeps the latest selected-device upload when an older read finishes later', async () => {
+@@ -639,38 +941,68 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [makeUploadFile('fast.hex', makeMicroPythonHex('radio.send("fast")'))] },
+     });
+ 
+-    await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
++    await waitForCodeName('fast.hex');
+     slowUpload.resolve(makeMicroPythonHex('radio.send("slow")'));
+ 
+-    await waitFor(() => expect(screen.getByText('Assigned: fast.hex')).toBeInTheDocument());
+-    expect(screen.queryByText('Assigned: slow.hex')).not.toBeInTheDocument();
++    await waitForCodeName('fast.hex');
++    expect(getCodeName()).not.toHaveTextContent('slow.hex');
    });
  
 -  it('supports dropping a .hex file anywhere in the right sidebar for the selected device', async () => {
@@ -410,10 +748,15 @@ index a523b5f..6861f53 100644
        dataTransfer: {
          files: [makeUploadFile('dropped.hex', makeMicroPythonHex('radio.send("drop")'))],
          types: ['Files'],
-@@ -660,6 +828,35 @@ describe('SwarmCanvasPanel', () => {
-     expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
-   });
+       },
+     });
  
+-    await waitFor(() => expect(screen.getByText('Assigned: dropped.hex')).toBeInTheDocument());
+-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
++    await waitForCodeName('dropped.hex');
++    expect(screen.getByRole('button', { name: 'Edit code' })).toBeInTheDocument();
++  });
++
 +  it('drops a .hex file onto the device under the pointer instead of the selection', async () => {
 +    const { container } = render(<SwarmCanvasPanel />);
 +    addDeviceFromSwarmTools();
@@ -426,8 +769,8 @@ index a523b5f..6861f53 100644
 +      },
 +    });
 +
-+    await waitFor(() => expect(screen.getByText('Assigned: targeted.hex')).toBeInTheDocument());
-+    expect(screen.getAllByText(/^Assigned:/)).toHaveLength(1);
++    await waitForCodeName('targeted.hex');
++    expect(document.querySelectorAll('.selection-code__name')).toHaveLength(1);
 +  });
 +
 +  it('shows the drop overlay only for an eligible canvas device', () => {
@@ -441,13 +784,43 @@ index a523b5f..6861f53 100644
 +
 +    fireEvent.dragLeave(canvasWrap, { dataTransfer: { types: ['Files'] } });
 +    expect(container.querySelector('.canvas-drop-overlay')).not.toBeInTheDocument();
-+  });
-+
+   });
+ 
    it('prompts before overwriting existing code on a device', async () => {
      render(<SwarmCanvasPanel />);
      const input = screen.getByLabelText(/Load code onto Node 1/);
-@@ -692,8 +889,8 @@ describe('SwarmCanvasPanel', () => {
-     expect(screen.queryByText('Source is hidden and this device cannot be overwritten.')).not.toBeInTheDocument();
+     fireEvent.change(input, { target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] } });
+-    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
++    await waitForCodeName('first.hex');
+ 
+     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+     fireEvent.change(input, { target: { files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))] } });
+     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+-    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
+-    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
++    expect(getCodeName()).toHaveTextContent('first.hex');
++    expect(getCodeName()).not.toHaveTextContent('second.hex');
+     confirmSpy.mockRestore();
+   });
+ 
+@@ -682,26 +1014,26 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [makeUploadFile('mystery.hex', makeMicroPythonHex('radio.send("mystery")'))] },
+     });
+ 
+-    await waitFor(() => expect(screen.getByText('Assigned: mystery.hex')).toBeInTheDocument());
+-    expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument();
++    await waitForCodeName('mystery.hex');
+     expect(screen.queryByRole('button', { name: 'Edit code' })).not.toBeInTheDocument();
++    expect(screen.queryByRole('button', { name: 'View code' })).not.toBeInTheDocument();
+     expect(screen.queryByLabelText(/Load code onto Node 2/)).not.toBeInTheDocument();
+-    expect(screen.getByText('Code locked')).toBeInTheDocument();
+-    expect(screen.queryByText('Code locked after first upload')).not.toBeInTheDocument();
+-    expect(screen.queryByText('Locked after first code upload.')).not.toBeInTheDocument();
+-    expect(screen.queryByText('Source is hidden and this device cannot be overwritten.')).not.toBeInTheDocument();
++    expect(screen.queryByRole('button', { name: 'Upload code' })).not.toBeInTheDocument();
++    expect(screen.queryByRole('button', { name: 'Unload code' })).not.toBeInTheDocument();
++    expect(screen.getByRole('button', { name: 'Reset device' })).toBeEnabled();
++    expect(screen.getByText('Locked', { selector: '.selection-name-badge' })).toBeInTheDocument();
    });
  
 -  it('blocks later overwrite attempts on locked devices through sidebar drop', async () => {
@@ -457,16 +830,68 @@ index a523b5f..6861f53 100644
  
      addLockedDeviceFromSwarmTools();
      fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
-@@ -701,7 +898,7 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [makeUploadFile('first.hex', makeMicroPythonHex('radio.send("one")'))] },
      });
-     await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
+-    await waitFor(() => expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument());
++    await waitForCodeName('first.hex');
  
 -    fireEvent.drop(screen.getByLabelText('Canvas controls and selection details'), {
 +    fireEvent.drop(container.querySelector('.canvas-wrap') as HTMLElement, {
        dataTransfer: {
          files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
          types: ['Files'],
-@@ -724,7 +921,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -711,20 +1043,55 @@ describe('SwarmCanvasPanel', () => {
+     await waitFor(() =>
+       expect(screen.getByText('Node 2 is locked after its first successful code upload.')).toBeInTheDocument(),
+     );
+-    expect(screen.getByText('Assigned: first.hex')).toBeInTheDocument();
+-    expect(screen.queryByText('Assigned: second.hex')).not.toBeInTheDocument();
++    expect(getCodeName()).toHaveTextContent('first.hex');
++    expect(getCodeName()).not.toHaveTextContent('second.hex');
+   });
+ 
+   it('deletes the selected device node from the canvas', () => {
+     const { container } = render(<SwarmCanvasPanel />);
+-    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
++    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
+     expect(container.querySelectorAll('.microbit-node')).toHaveLength(0);
+   });
+ 
++  it('drags a node relative to the grab point instead of snapping its centre to the pointer', () => {
++    const { container } = render(<SwarmCanvasPanel />);
++    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
++    stubCanvasGeometry(container);
++
++    const node = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
++    expect(node).toHaveAttribute('transform', 'translate(430 260)');
++
++    // Grab 40px right of and 20px below the centre (430, 260); nothing moves yet.
++    fireEvent.pointerDown(node, { pointerId: 1, clientX: 470, clientY: 280 });
++    expect(node).toHaveAttribute('transform', 'translate(430 260)');
++
++    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 471, clientY: 280 });
++    expect(node).toHaveAttribute('transform', 'translate(431 260)');
++
++    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 490, clientY: 300 });
++    expect(node).toHaveAttribute('transform', 'translate(450 280)');
++    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 490, clientY: 300 });
++  });
++
++  it('stores dragged positions as whole canvas units', () => {
++    const { container } = render(<SwarmCanvasPanel />);
++    const canvas = container.querySelector('.swarm-canvas') as SVGElement;
++    stubCanvasGeometry(container);
++
++    const node = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
++    fireEvent.pointerDown(node, { pointerId: 1, clientX: 430, clientY: 260 });
++    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 450.6, clientY: 280.4 });
++    expect(node).toHaveAttribute('transform', 'translate(451 280)');
++
++    fireEvent.pointerMove(canvas, { pointerId: 1, clientX: 300.2, clientY: 200.7 });
++    expect(node).toHaveAttribute('transform', 'translate(300 201)');
++    fireEvent.pointerUp(canvas, { pointerId: 1, clientX: 300.2, clientY: 200.7 });
++  });
++
    it('keeps regular devices draggable while preventing movement on pinned locked devices', () => {
      const { container } = render(<SwarmCanvasPanel />);
      const canvas = container.querySelector('.swarm-canvas') as SVGElement;
@@ -475,17 +900,86 @@ index a523b5f..6861f53 100644
  
      const regularNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
      fireEvent.click(screen.getByRole('button', { name: 'Pin device position' }));
-@@ -904,9 +1101,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -752,7 +1119,9 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.pointerUp(canvas, { pointerId: 3, clientX: 160, clientY: 160 });
+ 
+     expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
+-    expect(screen.getByText('Position and name locked')).toBeInTheDocument();
++    expect(
++      screen.getByText('Locked', { selector: '.selection-name-badge' }).getAttribute('title'),
++    ).toMatch(/uploads and code edits stay locked/);
+     expect(
+       screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
+     ).not.toBeInTheDocument();
+@@ -775,13 +1144,13 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+ 
+     addDeviceFromSwarmTools();
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+       target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
++    await waitFor(() => expect(screen.getByTitle('MakeCode simulator for Node 2')).toBeInTheDocument(), {
+       timeout: 12000,
+     });
+ 
+@@ -851,8 +1220,7 @@ describe('SwarmCanvasPanel', () => {
+   it('logs sound start once for bursty runtime sound events', async () => {
+     render(<SwarmCanvasPanel RuntimeHost={(props) => <BurstSoundEmitterHost {...props} />} />);
+ 
+-    const deviceLog = screen.getByLabelText('Event log for Node 1');
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+ 
+     await waitFor(() =>
+       expect(screen.getByText('Sound output started (level 9)')).toBeInTheDocument(),
+@@ -878,8 +1246,7 @@ describe('SwarmCanvasPanel', () => {
+     });
+     expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
+ 
+-    const deviceLog = screen.getByLabelText('Event log for Node 1');
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+     const diagnostic = await screen.findByText('Ignored invalid runtime radio signal strength: -52');
+     expect(diagnostic.closest('.device-log__line')?.querySelector('.device-log__type')).toHaveTextContent('err');
+   });
+@@ -903,10 +1270,7 @@ describe('SwarmCanvasPanel', () => {
+   it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
      render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
  
-     const deviceLog = screen.getByLabelText('Event log for Node 1');
+-    const deviceLog = screen.getByLabelText('Event log for Node 1');
 -    const radioInspector = screen.getByLabelText('Radio message inspector');
-     fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
 -    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
  
      await waitFor(() => expect(screen.getAllByText('sound:13').length).toBeGreaterThanOrEqual(2));
    });
-@@ -952,10 +1147,9 @@ describe('SwarmCanvasPanel', () => {
+@@ -917,8 +1281,7 @@ describe('SwarmCanvasPanel', () => {
+     addDeviceFromSwarmTools();
+     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
+ 
+-    const deviceLog = screen.getByLabelText('Event log for Node 2');
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+ 
+     await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
+     expect(screen.queryByText('Blocked radio packet from Node 1: group-mismatch')).not.toBeInTheDocument();
+@@ -935,8 +1298,7 @@ describe('SwarmCanvasPanel', () => {
+     addDeviceFromSwarmTools();
+     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
+ 
+-    const deviceLog = screen.getByLabelText('Event log for Node 2');
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+ 
+     await waitFor(() => expect(screen.getByText('Received radio packet from sensors')).toBeInTheDocument());
+   });
+@@ -952,10 +1314,9 @@ describe('SwarmCanvasPanel', () => {
      addDeviceFromSwarmTools();
      await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
  
@@ -498,20 +992,24 @@ index a523b5f..6861f53 100644
    });
  
    it('redacts radio inspector payloads when the sender is a locked device', async () => {
-@@ -967,19 +1161,182 @@ describe('SwarmCanvasPanel', () => {
+@@ -965,21 +1326,184 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+       target: { files: [makeUploadFile('locked.hex', makeMicroPythonHex('radio.send("hidden")'))] },
      });
-     await waitFor(() => expect(screen.getByText('Assigned: locked.hex')).toBeInTheDocument());
- 
+-    await waitFor(() => expect(screen.getByText('Assigned: locked.hex')).toBeInTheDocument());
+-
 -    const radioInspector = screen.getByLabelText('Radio message inspector');
 -    fireEvent.click(radioInspector.querySelector('summary') as HTMLElement);
--
++    await waitForCodeName('locked.hex');
+ 
      await waitFor(() => expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument());
 +    fireEvent.click(screen.getByRole('button', { name: 'Radio inspector' }));
      expect(screen.getByText(/Node 2 to 1 received/i)).toBeInTheDocument();
      expect(screen.queryByText('secret lesson')).not.toBeInTheDocument();
  
+-    fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
 +    fireEvent.click(screen.getByRole('button', { name: 'Close radio inspector' }));
-     fireEvent.click(screen.getByRole('button', { name: /^Delete$/ }));
++    fireEvent.click(screen.getByRole('button', { name: 'Delete node' }));
 +    fireEvent.click(screen.getByRole('button', { name: 'Radio inspector' }));
  
      expect(screen.getByText('Broadcast hidden for locked device')).toBeInTheDocument();
@@ -537,13 +1035,13 @@ index a523b5f..6861f53 100644
 +      await harness.dispatch({
 +        type: 'move-node',
 +        id: 'move-1',
-+        payload: { node_id: 'light-1', x: 103, y: 104 },
++        payload: { node_id: 'light-1', x: 103.4, y: 104.6 },
 +      });
 +    });
 +
 +    expect(harness.ackedIds).toEqual(['move-1']);
 +    fireEvent.pointerDown(container.querySelectorAll('.source-node')[0]!);
-+    expect(screen.getByText('X: 103 · Y: 104')).toBeInTheDocument();
++    expect(screen.getByText('X: 103 · Y: 105')).toBeInTheDocument();
 +
 +    expect(harness.ackedIds).toEqual(['move-1']);
 +    await expect(
@@ -684,7 +1182,97 @@ index a523b5f..6861f53 100644
    it('uses autogenerated fallback names and keeps radio identity keyed by device id', async () => {
      render(<SwarmCanvasPanel RuntimeHost={(props) => <RadioConfigThenPacketHost {...props} />} />);
  
-@@ -1341,7 +1698,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -997,8 +1521,7 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(renameInput, { target: { value: 'Alpha' } });
+     fireEvent.keyDown(renameInput, { key: 'Enter' });
+ 
+-    const renamedDeviceLog = screen.getByLabelText('Event log for Alpha');
+-    fireEvent.click(renamedDeviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+ 
+     await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
+   });
+@@ -1009,8 +1532,7 @@ describe('SwarmCanvasPanel', () => {
+     addDeviceFromSwarmTools();
+     await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
+ 
+-    const deviceLog = screen.getByLabelText('Event log for Node 2');
+-    fireEvent.click(deviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+ 
+     await waitFor(() =>
+       expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument(),
+@@ -1104,17 +1626,15 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Runtime source: micropython')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+ 
+     addDeviceFromSwarmTools();
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
+       target: { files: [makeUploadFile('mc_beacon.hex', makeMakeCodeHex({ 'main.ts': 'radio.sendString("ping")' }))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Runtime source: makecode-pxt')).toBeInTheDocument(), {
+-      timeout: 12000,
+-    });
++    await waitForCodeName('mc_beacon.hex');
+ 
+-    await waitFor(() => expect(deliveredPackets.length).toBeGreaterThan(0));
++    await waitFor(() => expect(deliveredPackets.length).toBeGreaterThan(0), { timeout: 12000 });
+     const firstDelivery = deliveredPackets.at(-1)?.[0];
+     expect(firstDelivery?.recipientId).toBe('device-2');
+     expect(firstDelivery?.packet.group).toBe(42);
+@@ -1127,8 +1647,7 @@ describe('SwarmCanvasPanel', () => {
+     const canvas = container.querySelector('.swarm-canvas') as SVGElement;
+     Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn(), configurable: true });
+     fireEvent.pointerDown(alphaNode as Element);
+-    const senderDeviceLog = screen.getByLabelText('Event log for Node 1');
+-    fireEvent.click(senderDeviceLog.querySelector('summary') as HTMLElement);
++    openRuntimeLogPanel();
+     await waitFor(() => expect(screen.getByText('Sent radio packet to 1 recipient(s)')).toBeInTheDocument());
+     expect(
+       screen.queryByText(/Translated MicroPython radio payload for MakeCode recipient:/i),
+@@ -1143,17 +1662,18 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+ 
+     await waitFor(() =>
+       expect(container.querySelector('[data-runtime-state="device-1:error"]')).toBeInTheDocument(),
+     );
+-    expect(screen.getByText(/something went wrong/i)).toBeInTheDocument();
++    expect(screen.getByRole('status')).toHaveTextContent('Simulated runtime crash');
+ 
+     fireEvent.click(screen.getAllByRole('button', { name: /^Reset$/ })[0]!);
+     await waitFor(() =>
+       expect(container.querySelector('[data-runtime-state="device-1:error"]')).not.toBeInTheDocument(),
+     );
++    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+   });
+ 
+   it('falls back to a runtime-only reset when loading the saved canvas fails', async () => {
+@@ -1164,7 +1684,7 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+ 
+     fireEvent.click(getSaveCanvasButton());
+     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+@@ -1316,7 +1836,7 @@ describe('SwarmCanvasPanel', () => {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("persist")'))] },
+     });
+ 
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+     fireEvent.click(getSaveCanvasButton());
+ 
+     await waitFor(() =>
+@@ -1341,7 +1861,7 @@ describe('SwarmCanvasPanel', () => {
      const { container } = render(<SwarmCanvasPanel />);
      const canvas = container.querySelector('.swarm-canvas') as SVGElement;
      const firstNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
@@ -693,7 +1281,53 @@ index a523b5f..6861f53 100644
  
      fireEvent.click(getSaveCanvasButton());
      await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
-@@ -1930,6 +2287,23 @@ function makeSwarmBundleFile(project: SwarmProject): File {
+@@ -1388,7 +1908,7 @@ describe('SwarmCanvasPanel', () => {
+     fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
+       target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
+     });
+-    await waitFor(() => expect(screen.getByText('Assigned: mp.hex')).toBeInTheDocument());
++    await waitForCodeName('mp.hex');
+ 
+     fireEvent.click(getSaveCanvasButton());
+     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+@@ -1398,7 +1918,12 @@ describe('SwarmCanvasPanel', () => {
+       target: { value: 'radio.send("edited")\n' },
+     });
+     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+-    await waitFor(() => expect(screen.getByText(/Editable source:/)).toHaveTextContent('saved changes ready'));
++    await waitFor(() =>
++      expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
++    );
++    fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
++    expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
++    fireEvent.click(screen.getByRole('button', { name: 'Close code editor' }));
+ 
+     const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+     fireEvent.click(getHeaderResetButton());
+@@ -1406,7 +1931,6 @@ describe('SwarmCanvasPanel', () => {
+     await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
+     expect(confirmSpy.mock.calls[0]?.[0]).toContain('restore saved code');
+     await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
+-    expect(screen.getByText(/Editable source:/)).toHaveTextContent('ready to edit');
+ 
+     fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
+     expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("ping")');
+@@ -1739,11 +2263,12 @@ function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonR
+       return;
+     }
+     emitted.current = true;
+-    const timerId = globalThis.setTimeout(() => {
++    // No cleanup: the panel re-renders when the Runtime log opens, and a cleared
++    // 0 ms timer would drop this fixture's single emission.
++    globalThis.setTimeout(() => {
+       onRuntimeLog('device-1', 'serial-output', 'sound:13');
+       onRadioPacket('device-1', { data: makeMakeCodeValuePacket('sound', 13) });
+     }, 0);
+-    return () => globalThis.clearTimeout(timerId);
+   }, [onRadioPacket, onRuntimeLog]);
+ 
+   return <div aria-label="MicroPython runtime host" />;
+@@ -1930,6 +2455,23 @@ function makeSwarmBundleFile(project: SwarmProject): File {
    });
  }
  
@@ -718,10 +1352,27 @@ index a523b5f..6861f53 100644
    const payload = new TextEncoder().encode(serializeProject(project));
    const bytes = new Uint8Array(7 + payload.length);
 diff --git a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
-index 29cd389..e2729cb 100644
+index 29cd389..738b90a 100644
 --- a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
 +++ b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
-@@ -74,6 +74,17 @@ import {
+@@ -6,6 +6,8 @@ import {
+   type ChangeEvent,
+   type DragEvent,
+   type ReactElement,
++  type ReactNode,
++  type RefObject,
+ } from 'react';
+ import { flushSync } from 'react-dom';
+ import { zipSync } from 'fflate';
+@@ -14,6 +16,7 @@ import {
+   defaultDeviceNameForId,
+   defaultEnvironmentSourceName,
+   normalizeInstructionsMarkdown,
++  snapPoint,
+   type DeviceEditableProgram,
+   type DeviceId,
+   type EnvironmentSource,
+@@ -74,6 +77,17 @@ import {
    resolveDeviceRuntimeSource as resolveEditableRuntimeSource,
  } from '../runtime/editableProgram';
  import { encodeMicroPythonRadioString } from '../runtime/micropythonIframeAdapter';
@@ -739,7 +1390,7 @@ index 29cd389..e2729cb 100644
  
  type Selection =
    | { type: 'device'; id: DeviceId }
-@@ -114,6 +125,11 @@ async function readBundleFileBytes(file: File): Promise<Uint8Array> {
+@@ -114,6 +128,11 @@ async function readBundleFileBytes(file: File): Promise<Uint8Array> {
  
  interface SwarmCanvasPanelProps {
    RuntimeHost?: (props: MicroPythonRuntimeHostProps) => ReactElement;
@@ -751,7 +1402,7 @@ index 29cd389..e2729cb 100644
  }
  
  interface ArtifactUploadIssue {
-@@ -175,8 +191,40 @@ const APP_VERSION_LABEL = `v${__APP_VERSION__}`;
+@@ -175,8 +194,40 @@ const APP_VERSION_LABEL = `v${__APP_VERSION__}`;
  const APP_REPOSITORY_URL = __APP_REPO_URL__;
  const MAX_CANVAS_NODE_NAME = 11;
  const MAX_SIDEBAR_NODE_NAME = 28;
@@ -793,7 +1444,7 @@ index 29cd389..e2729cb 100644
    const [model, setModel] = useState<CanvasModel>(() => {
      const project = createDemoProject();
      return {
-@@ -184,6 +232,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -184,6 +235,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        simulationState: resetSimulation(project, defaultRadioOptions),
      };
    });
@@ -804,7 +1455,7 @@ index 29cd389..e2729cb 100644
    const [selected, setSelected] = useState<Selection>({ type: 'device', id: 'device-1' });
    const [isAddLockedEnabled, setIsAddLockedEnabled] = useState(false);
    const [dragTarget, setDragTarget] = useState<DragTarget | null>(null);
-@@ -197,6 +249,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -197,6 +252,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const [canvasStateMessage, setCanvasStateMessage] = useState<string>();
    const [isBundleDropActive, setIsBundleDropActive] = useState(false);
    const [displaySnapshots, setDisplaySnapshots] = useState<Record<DeviceId, number[]>>({});
@@ -812,17 +1463,17 @@ index 29cd389..e2729cb 100644
    const [runtimeActivity, setRuntimeActivity] = useState<Record<DeviceId, DeviceRuntimeActivity>>({});
    const [runtimeDataLogs, setRuntimeDataLogs] = useState<Record<DeviceId, RuntimeDeviceDataLog>>({});
    const [scenarioResetSignal, setScenarioResetSignal] = useState(0);
-@@ -204,7 +257,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -204,7 +260,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const [artifactUploadIssues, setArtifactUploadIssues] = useState<Record<DeviceId, ArtifactUploadIssue>>({});
    const [artifactUploadState, setArtifactUploadState] = useState<Record<DeviceId, ArtifactUploadState>>({});
    const [runtimeErrorByDevice, setRuntimeErrorByDevice] = useState<Record<DeviceId, string>>({});
 -  const [isSidebarDragActive, setIsSidebarDragActive] = useState(false);
 +  const [hexDropDeviceId, setHexDropDeviceId] = useState<DeviceId | null>(null);
-+  const [isRadioInspectorOpen, setIsRadioInspectorOpen] = useState(false);
++  const [activeCanvasInspector, setActiveCanvasInspector] = useState<'radio' | 'runtime' | null>(null);
    const [renameTarget, setRenameTarget] = useState<RenamableSelection | null>(null);
    const [renameDraft, setRenameDraft] = useState('');
    const [editorDeviceId, setEditorDeviceId] = useState<DeviceId | null>(null);
-@@ -212,7 +266,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -212,7 +269,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const [hasSavedWorkingCopy, setHasSavedWorkingCopy] = useState(false);
    const [isResetActionPending, setIsResetActionPending] = useState(false);
    const svgRef = useRef<SVGSVGElement | null>(null);
@@ -830,11 +1481,11 @@ index 29cd389..e2729cb 100644
 +  const fieldRef = useRef<SVGRectElement | null>(null);
 +  const canvasWrapRef = useRef<HTMLDivElement | null>(null);
 +  const radioInspectorButtonRef = useRef<HTMLButtonElement | null>(null);
-+  const radioInspectorDialogRef = useRef<HTMLDialogElement | null>(null);
++  const runtimeLogButtonRef = useRef<HTMLButtonElement | null>(null);
    const bundleDropAreaRef = useRef<HTMLDivElement | null>(null);
    const modelRef = useRef(model);
    const uploadTokens = useRef(new Map<DeviceId, number>());
-@@ -221,6 +278,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -221,6 +281,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const displayFrameTimers = useRef(new Map<DeviceId, number>());
    const displayLastUpdateMs = useRef(new Map<DeviceId, number>());
    const buttonPulseTimers = useRef(new Map<string, number>());
@@ -842,7 +1493,15 @@ index 29cd389..e2729cb 100644
    const recentRoutedPackets = useRef(new Map<DeviceId, string>());
    const recentRuntimeSoundLogAt = useRef(new Map<DeviceId, number>());
    const activeRuntimeSoundLevels = useRef(new Map<DeviceId, number>());
-@@ -245,6 +303,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -229,6 +290,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+   const nextDeviceNumber = useRef(model.project.devices.length + 1);
+   const nextSourceNumber = useRef(nextEnvironmentSourceNumber(model.project.environmentSources));
+   const capturedPointerId = useRef<number | null>(null);
++  const dragGrabOffset = useRef<Point | null>(null);
+   const browserProjectStore = useRef<BrowserProjectStore | undefined>(undefined);
+   const browserWorkingCopyStore = useRef<BrowserWorkingCopyStore | undefined>(undefined);
+   const hasHydratedWorkingCopy = useRef(false);
+@@ -245,6 +307,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      selected.type === 'source'
        ? visibleEnvironmentSources.find((source) => source.id === selected.id)
        : undefined;
@@ -850,7 +1509,7 @@ index 29cd389..e2729cb 100644
    const editorDevice =
      editorDeviceId === null
        ? undefined
-@@ -275,6 +334,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -275,6 +338,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
        clearDisplayFrameTimers(displayFrameTimers.current);
        clearButtonPulseTimers(buttonPulseTimers.current);
@@ -858,7 +1517,7 @@ index 29cd389..e2729cb 100644
        recentRuntimeSoundLogAt.current.clear();
        activeRuntimeSoundLevels.current.clear();
      },
-@@ -283,12 +343,264 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -283,12 +347,249 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    useEffect(() => {
      modelRef.current = model;
    }, [model]);
@@ -975,7 +1634,7 @@ index 29cd389..e2729cb 100644
 +        if (!sourceId) {
 +          throw new Error(`Cannot create ${nodeType} environment node`);
 +        }
-+        updateSource(sourceId, { position: { x: payload.x, y: payload.y } });
++        updateSource(sourceId, { position: snapPoint({ x: payload.x, y: payload.y }) });
 +        if (typeof payload.level === 'number') {
 +          const patch = { [NODE_LEVEL_PROPERTY[nodeType]]: payload.level } as Partial<EnvironmentSource>;
 +          updateSource(sourceId, patch);
@@ -1049,38 +1708,23 @@ index 29cd389..e2729cb 100644
 +    });
 +  }, [bridge]);
 +
++  // A removed feature or a selection that stops being a device drops the open
++  // inspector, so re-enabling the surface never reopens a stale dialog.
 +  useEffect(() => {
-+    const dialog = radioInspectorDialogRef.current;
-+    if (!dialog) {
++    if (activeCanvasInspector === 'radio' && !showSurface('radio_inspector')) {
++      setActiveCanvasInspector(null);
 +      return;
 +    }
-+    if (isRadioInspectorOpen) {
-+      if (!dialog.open) {
-+        if (typeof dialog.showModal === 'function') {
-+          dialog.showModal();
-+        } else {
-+          dialog.setAttribute('open', '');
-+        }
-+      }
-+      return;
++    if (
++      activeCanvasInspector === 'runtime' &&
++      (!showSurface('runtime_log') || selected.type !== 'device')
++    ) {
++      setActiveCanvasInspector(null);
 +    }
-+    if (dialog.open) {
-+      if (typeof dialog.close === 'function') {
-+        dialog.close();
-+      } else {
-+        dialog.removeAttribute('open');
-+      }
-+    } else {
-+      dialog.removeAttribute('open');
-+    }
-+  }, [isRadioInspectorOpen]);
++  }, [activeCanvasInspector, learnerMode, learnerUiVisibility, selected]);
 +
-+  function closeRadioInspector() {
-+    setIsRadioInspectorOpen(false);
-+    const opener = radioInspectorButtonRef.current;
-+    if (opener?.isConnected) {
-+      opener.focus();
-+    }
++  function closeCanvasInspector() {
++    setActiveCanvasInspector(null);
 +  }
  
    useEffect(() => {
@@ -1123,7 +1767,7 @@ index 29cd389..e2729cb 100644
      try {
        browserProjectStore.current ??= createBrowserProjectStore();
        browserWorkingCopyStore.current ??= createBrowserWorkingCopyStore();
-@@ -337,7 +649,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -337,7 +638,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      return () => {
        cancelled = true;
      };
@@ -1132,7 +1776,7 @@ index 29cd389..e2729cb 100644
  
    useEffect(() => {
      if (!isCanvasStateMenuOpen) {
-@@ -365,7 +677,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -365,7 +666,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      function handleWindowFileDrag(event: globalThis.DragEvent) {
        if (
          shouldGuardGlobalFileDrop(event, [
@@ -1141,7 +1785,7 @@ index 29cd389..e2729cb 100644
            bundleDropAreaRef.current,
          ])
        ) {
-@@ -630,10 +942,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -630,10 +931,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      setSelected({ type: 'device', id });
    }
  
@@ -1154,7 +1798,7 @@ index 29cd389..e2729cb 100644
      }
      const sourceNumber = Math.max(
        nextSourceNumber.current,
-@@ -644,7 +956,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -644,7 +945,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      updateProject((current) => {
        nextSourceNumber.current = Math.max(
          nextSourceNumber.current,
@@ -1163,7 +1807,7 @@ index 29cd389..e2729cb 100644
        );
        const position =
          type === 'light'
-@@ -675,14 +987,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -675,14 +976,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                  mode: 'constant',
                  temperatureC: MICROBIT_TEMPERATURE_DEFAULT + 8,
                }
@@ -1186,7 +1830,7 @@ index 29cd389..e2729cb 100644
        return {
          ...current,
          environmentSources: [
-@@ -692,6 +1004,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -692,6 +993,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        };
      });
      setSelected({ type: 'source', id });
@@ -1194,7 +1838,7 @@ index 29cd389..e2729cb 100644
    }
  
    function updateSource(sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) {
-@@ -751,7 +1064,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -751,7 +1053,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
    function performRuntimeOnlyReset() {
      setScenarioResetSignal((current) => current + 1);
@@ -1204,7 +1848,142 @@ index 29cd389..e2729cb 100644
      setRuntimeActivity({});
      setRuntimeErrorByDevice({});
      clearRuntimeActivityTimers(runtimeActivityTimers.current);
-@@ -957,17 +1271,29 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -811,18 +1114,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     }
+   }
+ 
+-  function resetSelectedDevice() {
+-    if (!selectedDevice) {
+-      return;
+-    }
+-    const deviceId = selectedDevice.id;
+-    const nextNonce = runtimeResetNonce.current + 1;
+-    runtimeResetNonce.current = nextNonce;
+-    setRuntimeResetRequest({
+-      nonce: nextNonce,
+-      deviceIds: [deviceId],
+-      actionLabel: 'device reset',
+-    });
++  /** Transient per-device runtime presentation shared by reset and code unload. */
++  function clearDeviceRuntimePresentation(deviceId: DeviceId) {
+     setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
+     setRuntimeActivity((current) => {
+       if (!current[deviceId]) {
+@@ -855,6 +1148,97 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     clearRuntimeSoundEmitterState(deviceId);
+   }
+ 
++  function resetSelectedDevice() {
++    if (!selectedDevice) {
++      return;
++    }
++    const deviceId = selectedDevice.id;
++    const nextNonce = runtimeResetNonce.current + 1;
++    runtimeResetNonce.current = nextNonce;
++    setRuntimeResetRequest({
++      nonce: nextNonce,
++      deviceIds: [deviceId],
++      actionLabel: 'device reset',
++    });
++    clearDeviceRuntimePresentation(deviceId);
++  }
++
++  /**
++   * Remove a device's code assignment without deleting the device. The model
++   * change lands before the single `code-load` lifecycle event: that event is an
++   * assignment change, so the host invalidates recorded evidence and schedules
++   * the learner's debounced scene save on removal too.
++   */
++  function unloadDeviceCode(deviceId: DeviceId): boolean {
++    const isEligible = () => {
++      const candidate = modelRef.current.project.devices.find((device) => device.id === deviceId);
++      return Boolean(
++        candidate &&
++          !candidate.locked &&
++          candidate.programArtifactId &&
++          learnerCapabilitiesRef.current.load_code &&
++          artifactUploadState[deviceId] !== 'uploading',
++      );
++    };
++    if (!isEligible()) {
++      return false;
++    }
++    const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId)!;
++    const filename = artifactName(modelRef.current.project, device.programArtifactId!);
++    if (
++      typeof window !== 'undefined' &&
++      typeof window.confirm === 'function' &&
++      !window.confirm(
++        `Unload ${filename} from ${device.name}? Saved code edits for this device will be removed.`,
++      )
++    ) {
++      return false;
++    }
++    if (!isEligible()) {
++      return false;
++    }
++
++    uploadTokens.current.set(deviceId, (uploadTokens.current.get(deviceId) ?? 0) + 1);
++    flushSync(() => {
++      updateProject((current) => ({
++        ...current,
++        artifacts: replaceDeviceArtifact(current, deviceId),
++        devices: current.devices.map((candidate) =>
++          candidate.id === deviceId
++            ? { ...candidate, programArtifactId: undefined, editableProgram: undefined }
++            : candidate,
++        ),
++      }));
++      clearDeviceRuntimePresentation(deviceId);
++      setRuntimeLoadResults((current) => current.filter((result) => result.deviceId !== deviceId));
++      setArtifactUploadState((current) => {
++        if (!(deviceId in current)) {
++          return current;
++        }
++        const { [deviceId]: _removed, ...rest } = current;
++        return rest;
++      });
++      setArtifactUploadIssues((current) => {
++        if (!(deviceId in current)) {
++          return current;
++        }
++        const { [deviceId]: _removed, ...rest } = current;
++        return rest;
++      });
++      setRuntimeDataLogs((current) => {
++        if (!(deviceId in current)) {
++          return current;
++        }
++        const { [deviceId]: _removed, ...rest } = current;
++        return rest;
++      });
++      pendingRadioConfigHints.current.delete(deviceId);
++      recentRoutedPackets.current.delete(deviceId);
++    });
++    emitBridgeEvent({ kind: 'code-load', device_id: deviceId });
++    return true;
++  }
++
+   function toggleDevicePositionPin(deviceId: DeviceId) {
+     const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
+     if (!device) {
+@@ -866,6 +1250,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     const nextPinned = !isPositionPinned(device);
+     if (nextPinned) {
+       releaseCanvasPointer();
++      dragGrabOffset.current = null;
+       setDragTarget((current) =>
+         current?.type === 'device' && current.id === deviceId ? null : current,
+       );
+@@ -896,6 +1281,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     const nextPinned = !isPositionPinned(source);
+     if (nextPinned) {
+       releaseCanvasPointer();
++      dragGrabOffset.current = null;
+       setDragTarget((current) =>
+         current?.type === 'source' && current.id === sourceId ? null : current,
+       );
+@@ -957,17 +1343,29 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      }
  
      const deletingId = selected.id;
@@ -1239,7 +2018,7 @@ index 29cd389..e2729cb 100644
        return next;
      });
    }
-@@ -1326,10 +1652,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1326,10 +1724,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
      const applyDisplay = () => {
        displayLastUpdateMs.current.set(deviceId, Date.now());
@@ -1254,7 +2033,7 @@ index 29cd389..e2729cb 100644
      };
  
      if (elapsed < displayMinFrameMs) {
-@@ -1621,31 +1947,37 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1621,32 +2019,44 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      buttonPulseTimers.current.set(timerKey, timeoutId);
    }
  
@@ -1297,17 +2076,48 @@ index 29cd389..e2729cb 100644
 -      )
 -    ) {
 -      endDrag();
-+    const position = clientPointToCanvasPoint(fieldRef.current, clientX, clientY);
-+    if (!position) {
++    const point = clientPointToCanvasPoint(fieldRef.current, clientX, clientY);
++    if (!point) {
        return;
      }
  
      recordCanvasUserInteraction();
 -    const position = clientPointToCanvasPoint(svgRef.current, clientX, clientY);
-     const nextPosition = clampPoint(position);
+-    const nextPosition = clampPoint(position);
++    // Move relative to the grab point so the node never jumps its centre onto the
++    // pointer on the first movement event.
++    const grabOffset = dragGrabOffset.current;
++    const nextPosition = clampPoint({
++      x: point.x + (grabOffset?.x ?? 0),
++      y: point.y + (grabOffset?.y ?? 0),
++    });
      const target = dragTarget;
      setModel((current) => {
-@@ -1697,6 +2029,42 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       const nextProject = touchProjectUpdatedAt(
+@@ -1692,11 +2102,68 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+     capturedPointerId.current = null;
+   }
+ 
++  /**
++   * Start a drag at the pointer's position inside the node. The captured offset
++   * keeps subsequent movement relative, so the node's centre does not snap to
++   * the pointer on the first move.
++   */
++  function beginDrag(target: DragTarget, clientX: number, clientY: number) {
++    const centre =
++      target.type === 'device'
++        ? modelRef.current.project.devices.find((device) => device.id === target.id)?.position
++        : modelRef.current.project.environmentSources.find((source) => source.id === target.id)
++            ?.position;
++    const point = clientPointToCanvasPoint(fieldRef.current, clientX, clientY);
++    dragGrabOffset.current =
++      centre && point ? { x: centre.x - point.x, y: centre.y - point.y } : null;
++    setDragTarget(target);
++  }
++
+   function endDrag() {
+     releaseCanvasPointer();
++    dragGrabOffset.current = null;
      setDragTarget(null);
    }
  
@@ -1347,10 +2157,13 @@ index 29cd389..e2729cb 100644
 +    return positions;
 +  }
 +
++  const selectedLogs = selectedDevice
++    ? simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)
++    : [];
    const selectedRuntimeLoadResult = selectedDevice
      ? runtimeLoadResults.find(
          (result) =>
-@@ -1704,46 +2072,87 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1704,46 +2171,87 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
            result.artifactId === selectedDevice.programArtifactId,
        )
      : undefined;
@@ -1422,13 +2235,13 @@ index 29cd389..e2729cb 100644
 +    const targetId = hexDropTargetFor(event);
 +    setHexDropDeviceId(null);
 +    if (targetId === undefined) {
++      return;
++    }
++    const target = modelRef.current.project.devices.find((device) => device.id === targetId);
++    if (!target || !learnerCapabilitiesRef.current.load_code) {
        return;
      }
 -    const file = pickFirstHexFile(event.dataTransfer);
-+    const target = modelRef.current.project.devices.find((device) => device.id === targetId);
-+    if (!target || !learnerCapabilitiesRef.current.load_code) {
-+      return;
-+    }
 +    setSelected({ type: 'device', id: target.id });
 +    const file = pickFirstHexFile(event.dataTransfer) ?? event.dataTransfer.files[0];
      if (!file) {
@@ -1453,9 +2266,11 @@ index 29cd389..e2729cb 100644
    }
  
    function setCanvasDirtyState(nextDirtyState: boolean) {
-@@ -1774,14 +2183,15 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1773,15 +2281,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+       recordCanvasUserInteraction();
      }
      releaseCanvasPointer();
++    dragGrabOffset.current = null;
      setDragTarget(null);
 -    setIsSidebarDragActive(false);
 +    setHexDropDeviceId(null);
@@ -1471,7 +2286,7 @@ index 29cd389..e2729cb 100644
      setRuntimeActivity({});
      setRuntimeLoadResults([]);
      setRuntimeDataLogs({});
-@@ -1796,6 +2206,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1796,6 +2306,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
      clearDisplayFrameTimers(displayFrameTimers.current);
      clearButtonPulseTimers(buttonPulseTimers.current);
@@ -1479,7 +2294,7 @@ index 29cd389..e2729cb 100644
      displayLastUpdateMs.current.clear();
      const next = {
        project: nextProject,
-@@ -1985,7 +2396,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1985,7 +2496,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
      try {
        const imported = await decodeProjectBundle(await readBundleFileBytes(file));
@@ -1490,7 +2305,7 @@ index 29cd389..e2729cb 100644
        setCanvasStateMessage(`Imported "${imported.name}"`);
      } catch (error) {
        setCanvasStateMessage(
-@@ -2073,43 +2486,53 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2073,43 +2586,53 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const hasRuntimeDataLogFiles = runtimeDataLogFiles.length > 0;
  
    return (
@@ -1576,7 +2391,7 @@ index 29cd389..e2729cb 100644
            {hasCustomInstructions ? (
              <button
                type="button"
-@@ -2130,22 +2553,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2130,22 +2653,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
            >
              <span aria-hidden="true">↺</span> Reset
            </button>
@@ -1616,7 +2431,7 @@ index 29cd389..e2729cb 100644
          <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Swarm tool controls">
            <div className="canvas-state-panel__section">
              <span className="metric-label">Swarm tools</span>
-@@ -2353,11 +2779,55 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2353,11 +2879,89 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        ) : null}
  
        <div className="swarm-layout">
@@ -1636,9 +2451,10 @@ index 29cd389..e2729cb 100644
 +                className="canvas-control canvas-control--radio"
 +                aria-haspopup="dialog"
 +                aria-controls="radio-inspector-dialog"
++                aria-expanded={activeCanvasInspector === 'radio'}
 +                aria-label="Radio inspector"
 +                title="Radio inspector"
-+                onClick={() => setIsRadioInspectorOpen(true)}
++                onClick={() => setActiveCanvasInspector('radio')}
 +              >
 +                <svg
 +                  className="canvas-control__glyph"
@@ -1650,6 +2466,31 @@ index 29cd389..e2729cb 100644
 +                  <path d="M8.4 6.9a6.4 6.4 0 0 0 0 8.2M15.6 6.9a6.4 6.4 0 0 1 0 8.2M5.7 4.2a10.2 10.2 0 0 0 0 13.6M18.3 4.2a10.2 10.2 0 0 1 0 13.6" />
 +                </svg>
 +                <strong>{simulationState.radioEvents.length}</strong>
++              </button>
++            ) : null}
++            {showSurface('runtime_log') ? (
++              <button
++                ref={runtimeLogButtonRef}
++                type="button"
++                className="canvas-control canvas-control--runtime-log"
++                aria-haspopup="dialog"
++                aria-controls="runtime-log-dialog"
++                aria-expanded={activeCanvasInspector === 'runtime'}
++                aria-label="Runtime log"
++                title="Runtime log"
++                disabled={!selectedDevice}
++                onClick={() => setActiveCanvasInspector('runtime')}
++              >
++                <svg
++                  className="canvas-control__glyph"
++                  viewBox="0 0 24 24"
++                  aria-hidden="true"
++                  focusable="false"
++                >
++                  <path d="M5 5.5h14M5 12h14M5 18.5h14" />
++                  <path d="M2.6 5.5h.01M2.6 12h.01M2.6 18.5h.01" />
++                </svg>
++                {selectedDevice ? <strong>{selectedLogs.length}</strong> : null}
 +              </button>
 +            ) : null}
 +            {showSurface('debug_panel') ? (
@@ -1665,6 +2506,14 @@ index 29cd389..e2729cb 100644
 +              </button>
 +            ) : null}
 +          </div>
++          {showSurface('node_coordinates') && selectionPosition ? (
++            <div className="node-coordinate-readout" role="group" aria-label="Node coordinates">
++              <p>
++                X: {formatCanvasCoordinate(selectionPosition.x)} · Y:{' '}
++                {formatCanvasCoordinate(selectionPosition.y)}
++              </p>
++            </div>
++          ) : null}
            <svg
              ref={svgRef}
              className="swarm-canvas"
@@ -1673,7 +2522,7 @@ index 29cd389..e2729cb 100644
              role="img"
              aria-label="Draggable micro:bit swarm canvas"
              onPointerMove={(event) => updateDragPosition(event.clientX, event.clientY)}
-@@ -2385,7 +2855,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2385,7 +2989,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                </radialGradient>
              </defs>
  
@@ -1687,16 +2536,24 @@ index 29cd389..e2729cb 100644
  
              {simulationState.radioLinks
                .filter((link) => link.canCommunicate)
-@@ -2453,7 +2928,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2453,13 +3062,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                  transform={`translate(${source.position.x} ${source.position.y})`}
                  onPointerDown={(event) => {
                    setSelected({ type: 'source', id: source.id });
 -                  if (isPositionPinned(source)) {
 +                  if (!nodeIsMovable({ type: 'source', id: source.id })) {
                      releaseCanvasPointer();
++                    dragGrabOffset.current = null;
                      setDragTarget(null);
                      return;
-@@ -2501,9 +2976,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                   }
+                   captureCanvasPointer(event.pointerId);
+-                  setDragTarget({ type: 'source', id: source.id });
++                  beginDrag({ type: 'source', id: source.id }, event.clientX, event.clientY);
+                 }}
+               >
+                 {source.type === 'magnet' ? (
+@@ -2501,15 +3111,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                    key={device.deviceId}
                    className={`microbit-node ${isSelected ? 'microbit-node--selected' : ''}`}
                    transform={`translate(${device.position.x} ${device.position.y})`}
@@ -1706,9 +2563,17 @@ index 29cd389..e2729cb 100644
 -                    if (isPositionPinned(projectDevice)) {
 +                    if (!nodeIsMovable({ type: 'device', id: device.deviceId })) {
                        releaseCanvasPointer();
++                      dragGrabOffset.current = null;
                        setDragTarget(null);
                        return;
-@@ -2543,6 +3019,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                     }
+                     captureCanvasPointer(event.pointerId);
+-                    setDragTarget({ type: 'device', id: device.deviceId });
++                    beginDrag({ type: 'device', id: device.deviceId }, event.clientX, event.clientY);
+                   }}
+                 >
+                   <circle
+@@ -2543,6 +3155,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                      </g>
                    ) : null}
                    <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
@@ -1718,7 +2583,7 @@ index 29cd389..e2729cb 100644
                    <g className="button-combo-link" data-device-button-combo-link={device.deviceId}>
  		    <path d="M-29 -2 V20 H29 V-3"/>
                    </g>
-@@ -2585,6 +3064,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2585,6 +3200,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                    <text className="button-dot-label" x="29" y="18" textAnchor="middle">
                      
                    </text>
@@ -1727,17 +2592,12 @@ index 29cd389..e2729cb 100644
                    {runtimeState ? (
                      <g
                        className={`runtime-state runtime-state--${runtimeState}`}
-@@ -2618,73 +3099,97 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2618,118 +3235,133 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                );
              })}
            </svg>
-+          {hexDropTargetEligible && hexDropTargetDevice ? (
-+            <div className="canvas-drop-overlay">
-+              Drop .hex to load onto <strong>{hexDropTargetDevice.name}</strong>
-+            </div>
-+          ) : null}
-         </div>
- 
+-        </div>
+-
 -        <aside
 -          ref={sidebarRef}
 -          className={`swarm-sidebar ${canDropHexToSidebar ? 'swarm-sidebar--drop-enabled' : ''} ${isSidebarDragActive ? 'swarm-sidebar--drag-over' : ''}`}
@@ -1749,64 +2609,13 @@ index 29cd389..e2729cb 100644
 -          {isSidebarDragActive && canDropHexToSidebar ? (
 -            <div className="swarm-sidebar-drop-overlay">
 -              Drop .hex to load onto <strong>{selectedDevice?.name}</strong>
-+        <div className="selection-card">
-+          <span className="metric-label">Selection</span>
-+          {selectedDevice ? (
-+            <DeviceSelection
-+              project={project}
-+              readOnly={learnerMode}
-+              canLoadCode={learnerCapabilities.load_code}
-+              canEditCode={learnerCapabilities.edit_code}
-+              runtime={simulationState.devices[selectedDevice.id]}
-+              showMagneticReadings={FEATURE_FLAGS.magnet}
-+              showEnvironmentValues={showSurface('environment_values')}
-+              showRuntimeLog={showSurface('runtime_log')}
-+              runtimeLoadResult={selectedRuntimeLoadResult}
-+              uploadState={artifactUploadState[selectedDevice.id]}
-+              deviceId={selectedDevice.id}
-+              uploadIssue={artifactUploadIssues[selectedDevice.id]}
-+              runtimeError={runtimeErrorByDevice[selectedDevice.id]}
-+              logs={simulationState.deviceLogs.filter((log) => log.deviceId === selectedDevice.id)}
-+              onResetRuntime={resetSelectedDevice}
-+              onDeleteNode={deleteSelectedNode}
-+              onTogglePositionPin={toggleDevicePositionPin}
-+              onArtifactUpload={uploadArtifactForDevice}
-+              onOpenEditor={openDeviceEditor}
-+              canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
-+              isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
-+              renameDraft={renameDraft}
-+              onRenameDraftChange={setRenameDraft}
-+              onBeginRename={() => beginRename({ type: 'device', id: selectedDevice.id }, selectedDevice.name)}
-+              onCommitRename={commitRename}
-+              onCancelRename={cancelRename}
-+            />
-+          ) : selectedSource ? (
-+            <SourceSelection
-+              source={selectedSource}
-+              readOnly={learnerMode}
-+              updateSource={updateSource}
-+              onDeleteNode={deleteSelectedNode}
-+              onTogglePositionPin={toggleSourcePositionPin}
-+              isRenaming={renameTarget?.type === 'source' && renameTarget.id === selectedSource.id}
-+              renameDraft={renameDraft}
-+              onRenameDraftChange={setRenameDraft}
-+              onBeginRename={() => beginRename({ type: 'source', id: selectedSource.id }, selectedSource.name)}
-+              onCommitRename={commitRename}
-+              onCancelRename={cancelRename}
-+            />
-+          ) : (
-+            <p className="hint">Select a node or environmental source.</p>
-+          )}
-+          {showSurface('node_coordinates') && selectionPosition ? (
-+            <div className="node-coordinate-readout" role="group" aria-label="Node coordinates">
-+              <span className="metric-label">Node coordinates</span>
-+              <p>
-+                X: {formatCanvasCoordinate(selectionPosition.x)} · Y:{' '}
-+                {formatCanvasCoordinate(selectionPosition.y)}
-+              </p>
++          {hexDropTargetEligible && hexDropTargetDevice ? (
++            <div className="canvas-drop-overlay">
++              Drop .hex to load onto <strong>{hexDropTargetDevice.name}</strong>
              </div>
            ) : null}
--
++        </div>
+ 
 -          <div className="selection-card">
 -            <span className="metric-label">Selection</span>
 -            {selectedDevice ? (
@@ -1848,50 +2657,116 @@ index 29cd389..e2729cb 100644
 -                onCommitRename={commitRename}
 -                onCancelRename={cancelRename}
 -              />
--            ) : (
++        <div className="selection-card">
++          {selectedDevice ? (
++            <DeviceSelection
++              project={project}
++              readOnly={learnerMode}
++              canLoadCode={learnerCapabilities.load_code}
++              canEditCode={learnerCapabilities.edit_code}
++              runtime={simulationState.devices[selectedDevice.id]}
++              showMagneticReadings={FEATURE_FLAGS.magnet}
++              showEnvironmentValues={showSurface('environment_values')}
++              runtimeLoadResult={selectedRuntimeLoadResult}
++              uploadState={artifactUploadState[selectedDevice.id]}
++              deviceId={selectedDevice.id}
++              uploadIssue={artifactUploadIssues[selectedDevice.id]}
++              runtimeError={runtimeErrorByDevice[selectedDevice.id]}
++              onResetRuntime={resetSelectedDevice}
++              onUnloadCode={unloadDeviceCode}
++              onDeleteNode={deleteSelectedNode}
++              onTogglePositionPin={toggleDevicePositionPin}
++              onArtifactUpload={uploadArtifactForDevice}
++              onOpenEditor={openDeviceEditor}
++              canAssignCode={canAssignDeviceCode(selectedDevice, artifactUploadState[selectedDevice.id])}
++              isRenaming={renameTarget?.type === 'device' && renameTarget.id === selectedDevice.id}
++              renameDraft={renameDraft}
++              onRenameDraftChange={setRenameDraft}
++              onBeginRename={() => beginRename({ type: 'device', id: selectedDevice.id }, selectedDevice.name)}
++              onCommitRename={commitRename}
++              onCancelRename={cancelRename}
++            />
++          ) : selectedSource ? (
++            <SourceSelection
++              source={selectedSource}
++              readOnly={learnerMode}
++              updateSource={updateSource}
++              onDeleteNode={deleteSelectedNode}
++              onTogglePositionPin={toggleSourcePositionPin}
++              isRenaming={renameTarget?.type === 'source' && renameTarget.id === selectedSource.id}
++              renameDraft={renameDraft}
++              onRenameDraftChange={setRenameDraft}
++              onBeginRename={() => beginRename({ type: 'source', id: selectedSource.id }, selectedSource.name)}
++              onCommitRename={commitRename}
++              onCancelRename={cancelRename}
++            />
++          ) : (
++            <p className="hint">Select a node or environmental source.</p>
++          )}
++        </div>
++      </div>
++      {showSurface('radio_inspector') ? (
++        <CanvasInspectorDialog
++          id="radio-inspector-dialog"
++          label="Radio message inspector"
++          closeLabel="Close radio inspector"
++          open={activeCanvasInspector === 'radio'}
++          openerRef={radioInspectorButtonRef}
++          onClose={closeCanvasInspector}
++        >
++          <div className="compact-inspector__body">
++            {simulationState.radioEvents.length === 0 ? (
++              <p className="hint">No packets sent yet.</p>
+             ) : (
 -              <p className="hint">Select a node or environmental source.</p>
--            )}
--          </div>
++              simulationState.radioEvents
++                .slice(-6)
++                .reverse()
++                .map((event) => {
++                  const senderName =
++                    deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
++                  return (
++                    <article key={event.id} className="radio-event">
++                      <p className="radio-event__payload">
++                        {formatRadioInspectorPayload(event.data, event.payloadRedacted === true)}
++                      </p>
++                      <p className="radio-event__meta">
++                        {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
++                      </p>
++                    </article>
++                  );
++                })
+             )}
+           </div>
 -
 -          <details className="radio-inspector-card compact-inspector" aria-label="Radio message inspector">
 -            <summary>
 -              <span className="metric-label">Radio inspector</span>
 -              <strong>{simulationState.radioEvents.length}</strong>
 -            </summary>
-+        </div>
-+      </div>
-+      {showSurface('radio_inspector') ? (
-+        <dialog
-+          id="radio-inspector-dialog"
-+          ref={radioInspectorDialogRef}
-+          className="radio-inspector-dialog"
-+          aria-label="Radio message inspector"
-+          onClose={() => setIsRadioInspectorOpen(false)}
-+          onClick={(event) => {
-+            if (event.target === event.currentTarget) {
-+              closeRadioInspector();
-+            }
-+          }}
-+        >
-+          <div className="radio-inspector-dialog__card">
-+            <div className="radio-inspector-dialog__header">
-+              <span className="metric-label">Radio message inspector</span>
-+              <button
-+                type="button"
-+                className="radio-inspector-dialog__close"
-+                aria-label="Close radio inspector"
-+                onClick={closeRadioInspector}
-+              >
-+                ×
-+              </button>
-+            </div>
-             <div className="compact-inspector__body">
-               {simulationState.radioEvents.length === 0 ? (
-                 <p className="hint">No packets sent yet.</p>
-@@ -2708,28 +3213,16 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
-                   })
-               )}
-             </div>
+-            <div className="compact-inspector__body">
+-              {simulationState.radioEvents.length === 0 ? (
+-                <p className="hint">No packets sent yet.</p>
+-              ) : (
+-                simulationState.radioEvents
+-                  .slice(-6)
+-                  .reverse()
+-                  .map((event) => {
+-                    const senderName =
+-                      deviceDisplayNames.get(event.senderId) ?? defaultDeviceNameForId(event.senderId);
+-                    return (
+-                      <article key={event.id} className="radio-event">
+-                        <p className="radio-event__payload">
+-                          {formatRadioInspectorPayload(event.data, event.payloadRedacted === true)}
+-                        </p>
+-                        <p className="radio-event__meta">
+-                          {senderName} to {event.recipients.length} received / {event.blockedTargets.length} blocked
+-                        </p>
+-                      </article>
+-                    );
+-                  })
+-              )}
+-            </div>
 -          </details>
 -          <div className="swarm-sidebar-footer">
 -            <button
@@ -1904,10 +2779,41 @@ index 29cd389..e2729cb 100644
 -            >
 -              Debug
 -            </button>
-           </div>
+-          </div>
 -        </aside>
 -      </div>
-+        </dialog>
++        </CanvasInspectorDialog>
++      ) : null}
++      {showSurface('runtime_log') ? (
++        <CanvasInspectorDialog
++          id="runtime-log-dialog"
++          label="Runtime log"
++          closeLabel="Close runtime log"
++          open={activeCanvasInspector === 'runtime'}
++          openerRef={runtimeLogButtonRef}
++          onClose={closeCanvasInspector}
++        >
++          {selectedDevice ? (
++            <>
++              <p className="canvas-inspector-dialog__subtitle">{selectedDevice.name}</p>
++              <div className="compact-inspector__body">
++                {activeCanvasInspector !== 'runtime' || selectedLogs.length === 0 ? (
++                  <p className="hint">No device events yet.</p>
++                ) : (
++                  selectedLogs
++                    .slice(-6)
++                    .reverse()
++                    .map((log) => (
++                      <p key={log.id} className="device-log__line">
++                        <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
++                        <span>{formatRuntimeLogMessage(log.message, deviceDisplayNames)}</span>
++                      </p>
++                    ))
++                )}
++              </div>
++            </>
++          ) : null}
++        </CanvasInspectorDialog>
 +      ) : null}
        <div
          id="debug-tools-modal"
@@ -1921,7 +2827,7 @@ index 29cd389..e2729cb 100644
          onClick={() => setIsDebugModalOpen(false)}
        >
          <div className="debug-modal__card" onClick={(event) => event.stopPropagation()}>
-@@ -2771,6 +3264,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2771,6 +3403,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
          <DeviceCodeEditorModal
            deviceName={editorDevice.name}
            editableProgram={activeEditorProgram}
@@ -1929,8 +2835,109 @@ index 29cd389..e2729cb 100644
            onClose={() => setEditorDeviceId(null)}
            onSave={(nextProgram) => saveEditedProgram(editorDevice.id, nextProgram)}
          />
-@@ -2781,8 +3275,13 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2779,17 +3412,120 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+   );
+ }
  
++/**
++ * Shared modal shell for the canvas inspectors. Owns modal open/close, backdrop
++ * handling and focus restoration; each host detail (radio events, device log
++ * rows) is passed as children. Only mount it while its surface is enabled so a
++ * rendered trigger always has an `aria-controls` target.
++ */
++function CanvasInspectorDialog({
++  id,
++  label,
++  closeLabel,
++  open,
++  openerRef,
++  onClose,
++  children,
++}: {
++  id: string;
++  label: string;
++  closeLabel: string;
++  open: boolean;
++  openerRef: RefObject<HTMLButtonElement | null>;
++  onClose: () => void;
++  children: ReactNode;
++}) {
++  const dialogRef = useRef<HTMLDialogElement | null>(null);
++
++  function finishClose() {
++    onClose();
++    const opener = openerRef.current;
++    if (opener?.isConnected && !opener.disabled) {
++      opener.focus();
++    }
++  }
++
++  useEffect(() => {
++    const dialog = dialogRef.current;
++    if (!dialog) {
++      return;
++    }
++    if (open) {
++      if (!dialog.open) {
++        if (typeof dialog.showModal === 'function') {
++          dialog.showModal();
++        } else {
++          dialog.setAttribute('open', '');
++        }
++      }
++      return;
++    }
++    if (dialog.open && typeof dialog.close === 'function') {
++      // A native close fires `close`, which routes through finishClose().
++      dialog.close();
++      return;
++    }
++    dialog.removeAttribute('open');
++  }, [open]);
++
++  function requestClose() {
++    const dialog = dialogRef.current;
++    if (dialog?.open && typeof dialog.close === 'function') {
++      dialog.close();
++    } else {
++      dialog?.removeAttribute('open');
++    }
++    // Some dialog implementations (and the attribute fallback) never fire `close`,
++    // so the requester always finishes the close and restores focus itself.
++    finishClose();
++  }
++
++  return (
++    <dialog
++      id={id}
++      ref={dialogRef}
++      className="canvas-inspector-dialog"
++      aria-label={label}
++      onClose={finishClose}
++      onClick={(event) => {
++        if (event.target === event.currentTarget) {
++          requestClose();
++        }
++      }}
++    >
++      <div className="canvas-inspector-dialog__card">
++        <div className="canvas-inspector-dialog__header">
++          <span className="metric-label">{label}</span>
++          <button
++            type="button"
++            className="canvas-inspector-dialog__close"
++            aria-label={closeLabel}
++            onClick={requestClose}
++          >
++            ×
++          </button>
++        </div>
++        {children}
++      </div>
++    </dialog>
++  );
++}
++
  function DeviceSelection({
    project,
 +  readOnly = false,
@@ -1939,11 +2946,18 @@ index 29cd389..e2729cb 100644
    deviceId,
    showMagneticReadings,
 +  showEnvironmentValues,
-+  showRuntimeLog,
    runtime,
    runtimeLoadResult,
    uploadState,
-@@ -2803,8 +3302,13 @@ function DeviceSelection({
+   uploadIssue,
+   runtimeError,
+-  logs,
+   onResetRuntime,
++  onUnloadCode,
+   onDeleteNode,
+   onTogglePositionPin,
+   onArtifactUpload,
+@@ -2803,15 +3539,19 @@ function DeviceSelection({
    onCancelRename,
  }: {
    project: SwarmProject;
@@ -1953,12 +2967,50 @@ index 29cd389..e2729cb 100644
    deviceId: DeviceId;
    showMagneticReadings: boolean;
 +  showEnvironmentValues: boolean;
-+  showRuntimeLog: boolean;
    runtime?: DeviceRuntimeState;
    runtimeLoadResult?: DeviceProgramLoadResult;
    uploadState?: ArtifactUploadState;
-@@ -2839,78 +3343,84 @@ function DeviceSelection({
+   uploadIssue?: ArtifactUploadIssue;
+   runtimeError?: string;
+-  logs: SimulationState['deviceLogs'];
+   onResetRuntime: () => void;
++  onUnloadCode: (deviceId: DeviceId) => boolean;
+   onDeleteNode: () => void;
+   onTogglePositionPin: (deviceId: DeviceId) => void;
+   onArtifactUpload: (deviceId: DeviceId, file: File) => void;
+@@ -2824,129 +3564,136 @@ function DeviceSelection({
+   onCommitRename: () => void;
+   onCancelRename: () => void;
+ }) {
++  const uploadButtonRef = useRef<HTMLButtonElement | null>(null);
++  const uploadInputRef = useRef<HTMLInputElement | null>(null);
+   const device = project.devices.find((candidate) => candidate.id === deviceId);
+   if (!device) {
+     return <p className="hint">Device missing from project.</p>;
+   }
+-  const runtimeLogNames = new Map(project.devices.map((candidate) => [candidate.id, candidate.name] as const));
+-  const assignedArtifact = device.programArtifactId
+-    ? project.artifacts.find((artifact) => artifact.id === device.programArtifactId)
+-    : undefined;
+   const editableProgram = getActiveEditableProgram(device);
+   const locked = device.locked === true;
+   const positionPinned = isPositionPinned(device);
+   const renameLocked = isLockedNodeReadOnly(device);
    const pinControl = describePositionPinControl('device', locked, positionPinned);
++  const assignedName = device.programArtifactId
++    ? artifactName(project, device.programArtifactId)
++    : undefined;
++  const uploading = uploadState === 'uploading';
++  const showUpload = canLoadCode && (canAssignCode || uploading);
++  const showUnload = canLoadCode && !locked && Boolean(device.programArtifactId);
++  const failureMessage = uploadIssue
++    ? uploadIssue.message
++    : runtimeError
++      ? runtimeError
++      : runtimeLoadResult?.status === 'failed'
++        ? runtimeLoadResult.diagnostic ?? 'Code could not run.'
++        : undefined;
++  const statusMessage = uploading ? 'Loading…' : failureMessage;
  
    return (
 -    <>
@@ -1998,7 +3050,11 @@ index 29cd389..e2729cb 100644
 +          displayName={device.name}
 +          badge={
 +            locked ? (
-+              <span className="selection-name-badge" aria-label="Locked device">
++              <span
++                className="selection-name-badge"
++                aria-label="Locked device: code uploads and edits stay locked"
++                title="Locked after a code upload: uploads and code edits stay locked."
++              >
 +                <span aria-hidden="true">🔒</span> Locked
 +              </span>
 +            ) : undefined
@@ -2015,31 +3071,9 @@ index 29cd389..e2729cb 100644
 -        {!locked ? (
 -          <button type="button" onClick={() => onOpenEditor(device.id)} disabled={!editableProgram}>
 -            <span aria-hidden="true">✎</span> Edit code
-+        <div className="selection-actions">
-+          <button type="button" onClick={onResetRuntime} disabled={!device.programArtifactId}>
-+            <span aria-hidden="true">↺</span> Reset
-           </button>
+-          </button>
 -        ) : null}
-+          {!readOnly ? (
-+            <button type="button" onClick={onDeleteNode}>
-+              <span aria-hidden="true">🗑</span> Delete
-+            </button>
-+          ) : null}
-+          {!readOnly ? (
-+            <PositionPinButton
-+              title={pinControl.title}
-+              active={positionPinned}
-+              disabled={pinControl.disabled}
-+              onClick={() => onTogglePositionPin(device.id)}
-+            />
-+          ) : null}
-+          {!locked && editableProgram ? (
-+            <button type="button" onClick={() => onOpenEditor(device.id)}>
-+              <span aria-hidden="true">✎</span> {canEditCode ? 'Edit code' : 'View code'}
-+            </button>
-+          ) : null}
-+        </div>
-       </div>
+-      </div>
 -      {runtime ? (
 -        <>
 -          <dl className="radio-summary">
@@ -2073,6 +3107,160 @@ index 29cd389..e2729cb 100644
 -            ) : null}
 -          </dl>
 -        </>
+-      ) : null}
+-      <details className="device-log compact-inspector" aria-label={`Event log for ${device.name}`}>
+-        <summary>
+-          <span className="metric-label">Runtime log</span>
+-          <strong>{logs.length}</strong>
+-        </summary>
+-        <div className="compact-inspector__body">
+-          {logs.length === 0 ? (
+-            <p className="hint">No device events yet.</p>
+-          ) : (
+-            logs
+-              .slice(-6)
+-              .reverse()
+-              .map((log) => (
+-                <p key={log.id} className="device-log__line">
+-                  <span className="device-log__type">{formatDeviceLogType(log.type)}</span>
+-                  <span>{formatRuntimeLogMessage(log.message, runtimeLogNames)}</span>
+-                </p>
+-              ))
+-          )}
+-        </div>
+-      </details>
+-      <div className="selection-artifact-block">
+-        {locked ? (
+-          <p>{device.programArtifactId ? 'Code locked' : 'Code locked after first upload'}</p>
+-        ) : null}
+-        {locked && positionPinned ? (
+-          <div className="selection-position-lock">
+-            <p>Position and name locked</p>
++        {!readOnly ? (
++          <div className="selection-actions selection-actions--node">
++            <button type="button" onClick={onDeleteNode} aria-label="Delete node" title="Delete node">
++              <span aria-hidden="true">🗑</span>
++            </button>
++            <PositionPinButton
++              title={pinControl.title}
++              active={positionPinned}
++              disabled={pinControl.disabled}
++              onClick={() => onTogglePositionPin(device.id)}
++            />
+           </div>
+         ) : null}
+-        {canAssignCode ? (
+-          <label className="artifact-field artifact-field--compact">
+-            Load code onto {device.name}
++        <div className="selection-code">
++          <span className="metric-label">Code</span>
++          {showUpload ? (
++            <button
++              ref={uploadButtonRef}
++              type="button"
++              className="selection-code__action"
++              aria-label="Upload code"
++              title="Upload code"
++              aria-busy={uploading}
++              disabled={uploading}
++              onClick={() => uploadInputRef.current?.click()}
++            >
++              <UploadGlyph />
++            </button>
++          ) : null}
++          <span
++            className={assignedName ? 'selection-code__name' : 'selection-code__name selection-code__name--empty'}
++            title={assignedName ?? 'No code'}
++          >
++            {assignedName ?? 'No code'}
++          </span>
++          {editableProgram ? (
++            <button
++              type="button"
++              className="selection-code__action"
++              aria-label={canEditCode ? 'Edit code' : 'View code'}
++              title={canEditCode ? 'Edit code' : 'View code'}
++              onClick={() => onOpenEditor(device.id)}
++            >
++              <EditGlyph />
++            </button>
++          ) : null}
++          <button
++            type="button"
++            className="selection-code__action"
++            aria-label="Reset device"
++            title="Reset device"
++            disabled={!device.programArtifactId || uploading}
++            onClick={onResetRuntime}
++          >
++            <ResetGlyph />
++          </button>
++          {showUnload ? (
++            <button
++              type="button"
++              className="selection-code__action selection-code__action--danger"
++              aria-label="Unload code"
++              title="Unload code"
++              disabled={uploading}
++              onClick={() => {
++                if (onUnloadCode(device.id)) {
++                  uploadButtonRef.current?.focus();
++                }
++              }}
++            >
++              <TrashGlyph />
++            </button>
++          ) : null}
++          {showUpload ? (
+             <input
++              ref={uploadInputRef}
+               type="file"
+               accept=".hex"
++              hidden
++              aria-label={`Load code onto ${device.name}`}
+               onChange={(event) => {
+                 const file = event.target.files?.[0];
+                 if (file) {
+@@ -2955,46 +3702,58 @@ function DeviceSelection({
+                 event.currentTarget.value = '';
+               }}
+             />
+-          </label>
+-        ) : null}
+-        <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
+-        {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
+-        {editableProgram ? (
+-          <p>
+-            Editable source: <strong>{editableProgram.revision > 0 ? 'saved changes ready' : 'ready to edit'}</strong>
+-          </p>
+-        ) : null}
+-        {uploadIssue ? (
+-          <p className={uploadIssue.severity === 'error' ? 'hint hint--error' : 'hint'}>
+-            {uploadIssue.message}
+-          </p>
+-        ) : null}
+-        {uploadState === 'uploading' ? (
+-          <p>
+-            Runtime: <strong>loading</strong>
+-          </p>
+-        ) : null}
+-        {runtimeLoadResult ? (
+-          <p>
+-            Runtime: <strong>{runtimeLoadResult.status}</strong>
+-          </p>
+-        ) : device.programArtifactId && uploadState !== 'uploading' ? (
+-          <p>
+-            Runtime: <strong>pending</strong>
+-          </p>
+-        ) : null}
+-        {runtimeError ? (
+-          <p className="hint hint--error">
+-            Runtime: <strong>something went wrong</strong> — {runtimeError}
+-          </p>
+-        ) : null}
++          ) : null}
++        </div>
++      </div>
 +      <div className="selection-track selection-track--details">
 +        {runtime && showEnvironmentValues ? (
 +        <dl className="radio-summary">
@@ -2105,55 +3293,17 @@ index 29cd389..e2729cb 100644
 +            </>
 +          ) : null}
 +        </dl>
-       ) : null}
-+      {showRuntimeLog ? (
-       <details className="device-log compact-inspector" aria-label={`Event log for ${device.name}`}>
-         <summary>
-           <span className="metric-label">Runtime log</span>
-@@ -2932,7 +3442,9 @@ function DeviceSelection({
-           )}
-         </div>
-       </details>
--      <div className="selection-artifact-block">
 +      ) : null}
-+      </div>
-+      <div className="selection-track selection-track--program selection-artifact-block">
-         {locked ? (
-           <p>{device.programArtifactId ? 'Code locked' : 'Code locked after first upload'}</p>
-         ) : null}
-@@ -2941,12 +3453,13 @@ function DeviceSelection({
-             <p>Position and name locked</p>
-           </div>
-         ) : null}
--        {canAssignCode ? (
--          <label className="artifact-field artifact-field--compact">
--            Load code onto {device.name}
-+        {canAssignCode && canLoadCode ? (
-+          <label className="artifact-field artifact-field--compact selection-load-code">
-+            <span>Load code</span>
-             <input
-               type="file"
-               accept=".hex"
-+              aria-label={`Load code onto ${device.name}`}
-               onChange={(event) => {
-                 const file = event.target.files?.[0];
-                 if (file) {
-@@ -2957,7 +3470,9 @@ function DeviceSelection({
-             />
-           </label>
-         ) : null}
--        <p>{device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}</p>
-+        <p className="selection-artifact-block__assigned">
-+          {device.programArtifactId ? `Assigned: ${artifactName(project, device.programArtifactId)}` : 'No code assigned yet'}
-+        </p>
-         {assignedArtifact ? <p>Runtime source: {assignedArtifact.runtimeSource}</p> : null}
-         {editableProgram ? (
-           <p>
-@@ -2989,12 +3504,13 @@ function DeviceSelection({
-           </p>
-         ) : null}
        </div>
 -    </>
++      {statusMessage ? (
++        <p
++          className={uploading ? 'selection-status' : `selection-status selection-status--${uploadIssue?.severity ?? 'error'}`}
++          role="status"
++        >
++          {statusMessage}
++        </p>
++      ) : null}
 +    </div>
    );
  }
@@ -2164,7 +3314,7 @@ index 29cd389..e2729cb 100644
    updateSource,
    onDeleteNode,
    onTogglePositionPin,
-@@ -3006,6 +3522,7 @@ function SourceSelection({
+@@ -3006,6 +3765,7 @@ function SourceSelection({
    onCancelRename,
  }: {
    source: EnvironmentSource;
@@ -2172,7 +3322,7 @@ index 29cd389..e2729cb 100644
    updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
    onDeleteNode: () => void;
    onTogglePositionPin: (sourceId: EnvironmentSourceId) => void;
-@@ -3022,7 +3539,8 @@ function SourceSelection({
+@@ -3022,12 +3782,17 @@ function SourceSelection({
    const propertiesLocked = isLockedNodeReadOnly(source);
    const pinControl = describePositionPinControl('source', locked, positionPinned);
    return (
@@ -2182,7 +3332,17 @@ index 29cd389..e2729cb 100644
        <SelectionNameEditor
          displayName={source.name}
          badge={
-@@ -3038,8 +3556,8 @@ function SourceSelection({
+           locked ? (
+-            <span className="selection-name-badge" aria-label="Locked node">
++            <span
++              className="selection-name-badge"
++              aria-label="Locked node: source properties stay locked"
++              title="Locked: source properties stay locked."
++            >
+               <span aria-hidden="true">🔒</span> Locked
+             </span>
+           ) : undefined
+@@ -3038,10 +3803,10 @@ function SourceSelection({
          onBeginRename={onBeginRename}
          onCommitRename={onCommitRename}
          onCancelRename={onCancelRename}
@@ -2191,12 +3351,17 @@ index 29cd389..e2729cb 100644
 +        renameDisabled={readOnly || propertiesLocked}
 +        renameDisabledTitle={readOnly ? 'Learner mode hides rename controls' : 'Pinned locked nodes cannot be renamed'}
        />
-       <p className="hint">
+-      <p className="hint">
++      <span className="selection-source-type">
          {source.type === 'light'
-@@ -3051,102 +3569,111 @@ function SourceSelection({
+           ? 'Light source'
+           : source.type === 'sound'
+@@ -3049,104 +3814,106 @@ function SourceSelection({
+             : source.type === 'temperature'
+               ? 'Temperature source'
                : 'Magnet source'}
-       </p>
-       <div className="selection-actions">
+-      </p>
+-      <div className="selection-actions">
 -        <button type="button" onClick={onDeleteNode}>
 -          <span aria-hidden="true">🗑</span> Delete
 -        </button>
@@ -2206,23 +3371,22 @@ index 29cd389..e2729cb 100644
 -          disabled={pinControl.disabled}
 -          onClick={() => onTogglePositionPin(source.id)}
 -        />
-+        {!readOnly ? (
-+          <button type="button" onClick={onDeleteNode}>
-+            <span aria-hidden="true">🗑</span> Delete
+-      </div>
+-      {locked ? (
+-        <div className="selection-position-lock">
+-          <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
++      </span>
++      {!readOnly ? (
++        <div className="selection-actions selection-actions--node">
++          <button type="button" onClick={onDeleteNode} aria-label="Delete node" title="Delete node">
++            <span aria-hidden="true">🗑</span>
 +          </button>
-+        ) : null}
-+        {!readOnly ? (
 +          <PositionPinButton
 +            title={pinControl.title}
 +            active={positionPinned}
 +            disabled={pinControl.disabled}
 +            onClick={() => onTogglePositionPin(source.id)}
 +          />
-+        ) : null}
-       </div>
-       {locked ? (
-         <div className="selection-position-lock">
-           <p>{positionPinned ? 'Properties locked' : 'Properties unlocked'}</p>
          </div>
        ) : null}
 -      <RangeValueField
@@ -2387,7 +3551,49 @@ index 29cd389..e2729cb 100644
    );
  }
  
-@@ -3352,6 +3879,32 @@ function canAssignDeviceCode(
+@@ -3340,6 +4107,41 @@ function PinGlyph() {
+   );
+ }
+ 
++/** Decorative glyphs for the code controls; the button carries the accessible name. */
++function UploadGlyph() {
++  return (
++    <svg className="selection-code__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
++      <path d="M8 10.5V2.4M5 5.2 8 2.2l3 3" />
++      <path d="M3 9.5v3.3a.8.8 0 0 0 .8.8h8.4a.8.8 0 0 0 .8-.8V9.5" />
++    </svg>
++  );
++}
++
++function EditGlyph() {
++  return (
++    <svg className="selection-code__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
++      <path d="M10.6 2.4 13.6 5.4 6 13H3v-3z" />
++    </svg>
++  );
++}
++
++function ResetGlyph() {
++  return (
++    <svg className="selection-code__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
++      <path d="M13 8a5 5 0 1 1-1.6-3.7" />
++      <path d="M13.4 2.4v2.9h-2.9" />
++    </svg>
++  );
++}
++
++function TrashGlyph() {
++  return (
++    <svg className="selection-code__glyph" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
++      <path d="M3 4.4h10M6.4 4.4V2.8h3.2v1.6M4.3 4.4l.6 8.2a.8.8 0 0 0 .8.7h4.6a.8.8 0 0 0 .8-.7l.6-8.2" />
++    </svg>
++  );
++}
++
+ function canAssignDeviceCode(
+   device: Pick<VirtualDevice, 'locked' | 'programArtifactId'>,
+   uploadState?: ArtifactUploadState,
+@@ -3352,6 +4154,32 @@ function canAssignDeviceCode(
    }
    return !device.programArtifactId;
  }
@@ -2420,7 +3626,34 @@ index 29cd389..e2729cb 100644
  
  function isPositionPinned(
    node: Pick<VirtualDevice, 'positionPinned'> | Pick<EnvironmentSource, 'positionPinned'> | undefined,
-@@ -4275,10 +4828,16 @@ function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
+@@ -4186,7 +5014,7 @@ function makeArtifactId(deviceId: DeviceId, filename: string, timestamp: string)
+ function replaceDeviceArtifact(
+   project: SwarmProject,
+   deviceId: DeviceId,
+-  nextArtifact: SwarmProject['artifacts'][number],
++  nextArtifact?: SwarmProject['artifacts'][number],
+ ): SwarmProject['artifacts'] {
+   const targetDevice = project.devices.find((device) => device.id === deviceId);
+   if (!targetDevice) {
+@@ -4195,7 +5023,7 @@ function replaceDeviceArtifact(
+   const previousArtifactId = targetDevice.programArtifactId;
+   return [
+     ...project.artifacts.filter((artifact) => {
+-      if (artifact.id === nextArtifact.id) {
++      if (artifact.id === nextArtifact?.id) {
+         return false;
+       }
+       if (artifact.id !== previousArtifactId) {
+@@ -4205,7 +5033,7 @@ function replaceDeviceArtifact(
+         (device) => device.id !== deviceId && device.programArtifactId === artifact.id,
+       );
+     }),
+-    nextArtifact,
++    ...(nextArtifact ? [nextArtifact] : []),
+   ];
+ }
+ 
+@@ -4275,34 +5103,51 @@ function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
    });
  }
  
@@ -2432,6 +3665,7 @@ index 29cd389..e2729cb 100644
 +  options: { ignorePins?: boolean } = {},
 +): SwarmProject {
 +  const ignorePins = options.ignorePins ?? false;
++  const nextPosition = snapPoint(position);
    if (target.type === 'device') {
      const targetDevice = project.devices.find((device) => device.id === target.id);
 -    if (isPositionPinned(targetDevice)) {
@@ -2439,7 +3673,12 @@ index 29cd389..e2729cb 100644
        return project;
      }
      return {
-@@ -4290,7 +4849,7 @@ function moveProjectObject(project: SwarmProject, target: DragTarget, position:
+       ...project,
+       devices: project.devices.map((device) =>
+-        device.id === target.id ? { ...device, position } : device,
++        device.id === target.id ? { ...device, position: nextPosition } : device,
+       ),
+     };
    }
  
    const targetSource = project.environmentSources.find((source) => source.id === target.id);
@@ -2448,7 +3687,11 @@ index 29cd389..e2729cb 100644
      return project;
    }
    return {
-@@ -4301,8 +4860,18 @@ function moveProjectObject(project: SwarmProject, target: DragTarget, position:
+     ...project,
+     environmentSources: project.environmentSources.map((source) =>
+-      source.id === target.id ? { ...source, position } : source,
++      source.id === target.id ? { ...source, position: nextPosition } : source,
+     ),
    };
  }
  
@@ -2469,7 +3712,20 @@ index 29cd389..e2729cb 100644
    return {
      x: ((clientX - rect.left) / rect.width) * canvasSize.width,
      y: ((clientY - rect.top) / rect.height) * canvasSize.height,
-@@ -4498,6 +5067,13 @@ function normalizeRuntimeRadioPacket(
+@@ -4344,10 +5189,10 @@ function nextEnvironmentSourceNumber(
+ }
+ 
+ function clampPoint(point: Point): Point {
+-  return {
++  return snapPoint({
+     x: Math.min(canvasSize.width - 42, Math.max(42, point.x)),
+     y: Math.min(canvasSize.height - 42, Math.max(42, point.y)),
+-  };
++  });
+ }
+ 
+ const emptyLedPixels = Array.from({ length: 25 }, () => 0);
+@@ -4498,6 +5343,13 @@ function normalizeRuntimeRadioPacket(
    return { packet: normalized, diagnostics };
  }
  
@@ -2483,6 +3739,86 @@ index 29cd389..e2729cb 100644
  function formatRangeValue(value: number, expectsInteger: boolean): string {
    return expectsInteger ? String(Math.round(value)) : String(value);
  }
+diff --git a/vendor/swarm-sim/src/domain/project.ts b/vendor/swarm-sim/src/domain/project.ts
+index e111ddc..4ba11de 100644
+--- a/vendor/swarm-sim/src/domain/project.ts
++++ b/vendor/swarm-sim/src/domain/project.ts
+@@ -12,6 +12,14 @@ export interface Point {
+   y: number;
+ }
+ 
++/**
++ * Canvas positions are stored in whole units: placement, scene bundles and the
++ * coordinate readout all agree on the same integer grid.
++ */
++export function snapPoint(point: Point): Point {
++  return { x: Math.round(point.x), y: Math.round(point.y) };
++}
++
+ export interface CanvasViewOptions {
+   showRadioRange: boolean;
+ }
+diff --git a/vendor/swarm-sim/src/domain/projectSerialization.test.ts b/vendor/swarm-sim/src/domain/projectSerialization.test.ts
+index f9f0c2d..e3ee632 100644
+--- a/vendor/swarm-sim/src/domain/projectSerialization.test.ts
++++ b/vendor/swarm-sim/src/domain/projectSerialization.test.ts
+@@ -38,6 +38,31 @@ describe('project serialization', () => {
+     });
+   });
+ 
++  it('stores positions as whole canvas units on deserialization', () => {
++    const base = makeProject();
++    const project: SwarmProject = {
++      ...base,
++      devices: base.devices.map((device, index) => ({
++        ...device,
++        position: index === 0 ? { x: 120.4, y: 79.6 } : device.position,
++      })),
++      environmentSources: [
++        {
++          id: 'light-1',
++          type: 'light',
++          name: 'Light 1',
++          position: { x: 30.5, y: 40.5 },
++          radius: 160,
++          intensity: 0.8,
++        },
++      ],
++    };
++
++    const roundTripped = deserializeProject(serializeProject(project));
++    expect(roundTripped.devices[0]?.position).toEqual({ x: 120, y: 80 });
++    expect(roundTripped.environmentSources[0]?.position).toEqual({ x: 31, y: 41 });
++  });
++
+   it('deserializes legacy byte-backed artifacts from older schema payloads', () => {
+     const legacyProject = {
+       ...makeProject(),
+diff --git a/vendor/swarm-sim/src/domain/projectSerialization.ts b/vendor/swarm-sim/src/domain/projectSerialization.ts
+index c4ab0cd..bc1736a 100644
+--- a/vendor/swarm-sim/src/domain/projectSerialization.ts
++++ b/vendor/swarm-sim/src/domain/projectSerialization.ts
+@@ -3,6 +3,7 @@ import {
+   normalizeInstructionsMarkdown,
+   defaultEnvironmentSourceName,
+   PROJECT_SCHEMA_VERSION,
++  snapPoint,
+   type ArtifactProgram,
+   type DeviceEditableProgram,
+   type EnvironmentSource,
+@@ -274,10 +275,10 @@ function parseTemperatureMode(value: unknown, label: string): 'constant' | 'poin
+ function parsePoint(value: unknown, label: string) {
+   const point = expectRecord(value, label);
+ 
+-  return {
++  return snapPoint({
+     x: expectNumber(point.x, `${label}.x`),
+     y: expectNumber(point.y, `${label}.y`),
+-  };
++  });
+ }
+ 
+ function parseArtifactKind(value: unknown): ArtifactKind {
 diff --git a/vendor/swarm-sim/src/simulation/simulationEngine.ts b/vendor/swarm-sim/src/simulation/simulationEngine.ts
 index 4c0f6d8..e934c22 100644
 --- a/vendor/swarm-sim/src/simulation/simulationEngine.ts
@@ -2537,16 +3873,60 @@ index 4c0f6d8..e934c22 100644
  
    return {
 diff --git a/vendor/swarm-sim/src/styles.css b/vendor/swarm-sim/src/styles.css
-index e3abf64..4854c9d 100644
+index e3abf64..696da40 100644
 --- a/vendor/swarm-sim/src/styles.css
 +++ b/vendor/swarm-sim/src/styles.css
-@@ -872,20 +872,21 @@ button:disabled {
+@@ -44,6 +44,22 @@ input {
+   padding: 18px 0;
+ }
+ 
++/* Embedded learner mode fills the SCORM iframe: the canvas takes the free height
++   and the selection strip keeps its intrinsic row. Author mode is unchanged. */
++.app-shell--learner {
++  display: flex;
++  flex-direction: column;
++  width: 100%;
++  height: 100dvh;
++  min-height: 0;
++  padding: 0;
++}
++
++body:has(.app-shell--learner) {
++  min-width: 0;
++  overflow: hidden;
++}
++
+ .eyebrow {
+   margin: 0 0 14px;
+   color: var(--cyan);
+@@ -253,7 +269,8 @@ h2 {
+ .code-editor-modal__card {
+   position: relative;
+   width: min(980px, calc(100% - 32px));
+-  max-height: calc(100vh - 72px);
++  height: min(calc(100dvh - 48px), 780px);
++  max-height: calc(100dvh - 48px);
+   overflow: hidden;
+   border: 1px solid rgba(105, 247, 255, 0.36);
+   padding: 20px;
+@@ -368,7 +385,8 @@ h2 {
+ 
+ .code-editor-modal__editor {
+   display: grid;
+-  min-height: min(62vh, 600px);
++  flex: 1 1 auto;
++  min-height: 0;
+   grid-template-rows: auto minmax(0, 1fr);
+   gap: 8px;
+ }
+@@ -872,20 +890,21 @@ button:disabled {
  
  .swarm-layout {
    display: grid;
 -  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+-  gap: 20px;
 +  grid-template-columns: minmax(0, 1fr);
-   gap: 20px;
++  gap: 0;
    margin-top: 28px;
  }
  
@@ -2566,7 +3946,7 @@ index e3abf64..4854c9d 100644
    touch-action: none;
    border: 1px solid rgba(105, 247, 255, 0.24);
    background:
-@@ -895,6 +896,74 @@ button:disabled {
+@@ -895,6 +914,94 @@ button:disabled {
    background-size: 36px 36px;
  }
  
@@ -2631,17 +4011,37 @@ index e3abf64..4854c9d 100644
 +}
 +
 +.swarm-panel--learner {
-+  padding: 12px;
++  display: flex;
++  flex: 1 1 auto;
++  flex-direction: column;
++  min-height: 0;
++  padding: 4px;
 +}
 +
 +.swarm-panel--learner .swarm-layout {
++  flex: 1 1 auto;
++  grid-template-rows: minmax(0, 1fr) auto;
++  min-height: 0;
 +  margin-top: 0;
++}
++
++.swarm-panel--learner .canvas-wrap {
++  min-height: 0;
++}
++
++/* The learner field letterboxes inside its track instead of forcing the 860:520
++   aspect ratio; the SVG viewBox still owns client-to-coordinate conversion. */
++.swarm-panel--learner .swarm-canvas {
++  width: 100%;
++  height: 100%;
++  min-height: 0;
++  aspect-ratio: auto;
 +}
 +
  .canvas-field {
    fill: rgba(5, 13, 15, 0.62);
  }
-@@ -1137,51 +1206,9 @@ button:disabled {
+@@ -1137,51 +1244,9 @@ button:disabled {
    pointer-events: none;
  }
  
@@ -2693,7 +4093,7 @@ index e3abf64..4854c9d 100644
  .runtime-host-card {
    border: 1px solid rgba(147, 169, 134, 0.24);
    padding: 16px;
-@@ -1191,7 +1218,6 @@ button:disabled {
+@@ -1191,7 +1256,6 @@ button:disabled {
  .toolbar-card .metric-label,
  .selection-card .metric-label,
  .telemetry-card .metric-label,
@@ -2701,7 +4101,24 @@ index e3abf64..4854c9d 100644
  .runtime-host-card .metric-label {
    flex-basis: 100%;
    margin-bottom: 2px;
-@@ -1264,8 +1290,7 @@ button:disabled {
+@@ -1206,6 +1270,16 @@ button:disabled {
+   text-transform: uppercase;
+ }
+ 
++/* The selection strip is contiguous with the canvas (no grid gap) and shares its
++   bottom border, so device controls read as part of the field, not a second card. */
++.selection-card {
++  display: flex;
++  flex-direction: column;
++  gap: 6px;
++  padding: 6px 10px;
++  border-top: 0;
++}
++
+ .selection-name-row {
+   display: flex;
+   align-items: center;
+@@ -1264,8 +1338,7 @@ button:disabled {
  }
  
  .selection-card p,
@@ -2711,98 +4128,220 @@ index e3abf64..4854c9d 100644
    margin: 10px 0 0;
    color: var(--muted);
  }
-@@ -1277,6 +1302,130 @@ button:disabled {
+@@ -1277,131 +1350,267 @@ button:disabled {
    margin-top: 10px;
  }
  
+-.selection-actions button {
+-  display: inline-flex;
+-  align-items: center;
 +.selection-tracks {
 +  display: grid;
-+  gap: 12px;
-+}
-+
+   gap: 6px;
+-  padding: 7px 10px;
+-  font-size: 0.7rem;
+ }
+ 
+-.selection-action-pin {
+-  justify-content: center;
+-  min-width: 38px;
+-  padding-inline: 8px;
 +.selection-track {
 +  display: flex;
 +  flex-wrap: wrap;
 +  align-items: center;
-+  gap: 8px 16px;
++  gap: 4px 12px;
 +  min-width: 0;
-+}
-+
+ }
+ 
+-.selection-action-pin--active {
+-  border-color: rgba(183, 255, 74, 0.42);
+-  background: rgba(183, 255, 74, 0.1);
+-  color: var(--phosphor);
 +.selection-track > * {
 +  min-width: 0;
-+}
-+
+ }
+ 
+-.pin-glyph {
+-  width: 1rem;
+-  height: 1rem;
+-  display: block;
+-  fill: currentColor;
 +.selection-track--identity .selection-actions {
 +  margin-top: 0;
-+}
-+
+ }
+ 
+-.selection-artifact-block {
+-  margin-top: 12px;
+-  padding-top: 12px;
+-  border-top: 1px solid rgba(147, 169, 134, 0.2);
+-  display: grid;
+-  gap: 6px;
++.selection-track--identity .selection-name-row {
++  flex: 1 1 12rem;
++  flex-wrap: nowrap;
++  margin-top: 0;
+ }
+ 
+-.selection-artifact-block p {
 +.selection-track--details {
 +  align-items: start;
 +}
 +
 +.selection-track--details > .radio-summary {
 +  flex: 1 1 220px;
-+  margin: 0;
+   margin: 0;
 +}
 +
-+.selection-track--details > .device-log {
-+  flex: 1 1 220px;
-+  margin-top: 0;
-+  border-top: 0;
-+  padding-top: 0;
-+}
-+
-+.selection-track--program {
-+  display: grid;
-+  gap: 6px;
-+}
-+
-+.selection-artifact-block__assigned {
-+  color: var(--phosphor);
-+  font-weight: 900;
-+}
-+
-+.selection-load-code {
-+  display: inline-flex;
-+  flex-wrap: wrap;
++.selection-source-type {
++  flex: 0 1 auto;
+   color: var(--muted);
+-  font-size: 0.78rem;
++  font-size: 0.72rem;
++  white-space: nowrap;
++  overflow: hidden;
++  text-overflow: ellipsis;
+ }
+ 
+-.selection-position-lock {
+-  display: grid;
+-  gap: 6px;
++/* Code group: identity and code functions wrap as units, and only the filename
++   shrinks — glyph targets keep their 32px minimum size. */
++.selection-code {
++  display: flex;
++  flex: 0 0 auto;
++  flex-wrap: nowrap;
 +  align-items: center;
-+  gap: 6px;
-+  align-self: start;
-+  justify-self: start;
-+  padding: 6px 10px;
-+  border: 1px solid rgba(105, 247, 255, 0.32);
++  gap: 2px;
++  min-width: 0;
++  margin-left: auto;
+ }
+ 
+-.selection-position-lock button {
+-  justify-self: start;
+-  padding: 7px 10px;
+-  font-size: 0.72rem;
++.selection-code > .metric-label {
++  flex: 0 0 auto;
++  margin: 0 4px 0 0;
+ }
+ 
++.selection-code__action {
++  display: inline-grid;
++  flex: 0 0 auto;
++  place-items: center;
++  min-width: 32px;
++  min-height: 32px;
++  padding: 0 5px;
++  border: 1px solid transparent;
++  background: transparent;
 +  color: var(--cyan);
-+  font-size: 0.7rem;
-+  font-weight: 900;
-+  letter-spacing: 0.08em;
-+  text-transform: uppercase;
 +  cursor: pointer;
 +}
-+
-+.selection-load-code input[type='file'] {
-+  max-width: 11rem;
-+  font-size: 0.66rem;
+ 
++.selection-code__action:hover:not(:disabled) {
++  border-color: rgba(105, 247, 255, 0.36);
++  background: rgba(105, 247, 255, 0.08);
++}
+ 
+-.radio-summary {
+-  display: grid;
+-  grid-template-columns: repeat(2, minmax(0, 1fr));
+-  gap: 8px;
+-  margin: 14px 0;
++.selection-code__action:focus-visible {
++  outline: 2px solid var(--cyan);
++  outline-offset: 1px;
+ }
+ 
+-.radio-summary div {
+-  border: 1px solid rgba(183, 255, 74, 0.16);
+-  padding: 8px;
+-  background: rgba(183, 255, 74, 0.04);
++.selection-code__action--danger {
++  color: var(--danger);
+ }
+ 
+-.radio-summary dt {
+-  color: var(--muted);
+-  font-size: 0.68rem;
+-  font-weight: 900;
+-  letter-spacing: 0.12em;
+-  text-transform: uppercase;
++.selection-code__glyph {
++  width: 1.05rem;
++  height: 1.05rem;
++  fill: none;
++  stroke: currentColor;
++  stroke-linecap: round;
++  stroke-linejoin: round;
++  stroke-width: 1.6;
+ }
+ 
+-.radio-summary dd {
+-  margin: 4px 0 0;
++.selection-code__name {
++  min-width: 0;
++  max-width: 13rem;
++  overflow: hidden;
+   color: var(--phosphor);
+-  font-size: 1.1rem;
++  font-size: 0.8rem;
+   font-weight: 900;
++  text-overflow: ellipsis;
++  white-space: nowrap;
+ }
+ 
+-.device-log {
+-  margin-top: 16px;
+-  border-top: 1px solid rgba(147, 169, 134, 0.2);
+-  padding-top: 12px;
++.selection-code__name--empty {
++  color: var(--muted);
++  font-weight: 700;
+ }
+ 
+-.compact-inspector {
+-  padding: 0;
++.selection-status {
++  margin: 0;
++  color: var(--muted);
+   font-size: 0.76rem;
+ }
+ 
+-.compact-inspector summary {
++.selection-status--warning {
++  color: var(--amber);
 +}
 +
++.selection-status--error {
++  color: var(--danger);
++}
++
++/* Canvas HUD: the coordinate readout sits above the SVG at the top left and is
++   pointer-transparent so it never blocks the field. */
 +.node-coordinate-readout {
-+  margin-top: 12px;
-+  padding-top: 12px;
-+  border-top: 1px solid rgba(147, 169, 134, 0.2);
-+}
-+
-+.node-coordinate-readout .metric-label {
-+  display: block;
++  position: absolute;
++  top: 10px;
++  left: 10px;
++  z-index: 3;
++  padding: 3px 8px;
++  border: 1px solid rgba(105, 247, 255, 0.24);
++  background: rgba(5, 13, 15, 0.78);
++  pointer-events: none;
 +}
 +
 +.node-coordinate-readout p {
-+  margin: 4px 0 0;
++  margin: 0;
 +  color: var(--phosphor);
 +  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
++  font-size: 0.72rem;
 +  font-weight: 900;
 +  letter-spacing: 0.04em;
 +}
 +
-+.radio-inspector-dialog {
++.canvas-inspector-dialog {
 +  width: min(30rem, calc(100vw - 2rem));
 +  max-height: min(70vh, 32rem);
 +  padding: 0;
@@ -2811,38 +4350,128 @@ index e3abf64..4854c9d 100644
 +  color: var(--ink);
 +}
 +
-+.radio-inspector-dialog::backdrop {
++.canvas-inspector-dialog::backdrop {
 +  background: rgba(0, 0, 0, 0.62);
 +}
 +
-+.radio-inspector-dialog__card {
++.canvas-inspector-dialog__card {
 +  display: grid;
++  min-height: 0;
 +}
 +
-+.radio-inspector-dialog__header {
-+  display: flex;
-+  align-items: center;
-+  justify-content: space-between;
-+  gap: 12px;
++.canvas-inspector-dialog__header {
+   display: flex;
+   align-items: center;
+   justify-content: space-between;
+   gap: 12px;
+-  padding: 10px 12px;
+-  cursor: pointer;
+-  list-style: none;
 +  padding: 12px 14px;
 +  border-bottom: 1px solid rgba(147, 169, 134, 0.24);
-+}
-+
-+.radio-inspector-dialog__close {
+ }
+ 
+-.compact-inspector summary::-webkit-details-marker {
+-  display: none;
++.canvas-inspector-dialog__close {
 +  padding: 4px 9px;
 +  font-size: 0.9rem;
 +  line-height: 1;
-+}
-+
-+.radio-inspector-dialog .compact-inspector__body {
-+  max-height: none;
+ }
+ 
+-.compact-inspector summary::after {
+-  content: "+";
+-  color: var(--cyan);
++.canvas-inspector-dialog__subtitle {
++  margin: 0;
++  padding: 8px 14px;
++  border-bottom: 1px solid rgba(147, 169, 134, 0.16);
++  color: var(--phosphor);
++  font-size: 0.78rem;
+   font-weight: 900;
++  letter-spacing: 0.08em;
++  text-transform: uppercase;
+ }
+ 
+-.compact-inspector[open] summary::after {
+-  content: "-";
++/* The shared body scrolls inside the modal instead of growing past the viewport. */
++.canvas-inspector-dialog .compact-inspector__body {
++  max-height: min(52vh, 24rem);
++  overflow: auto;
 +  border-top: 0;
+ }
+ 
+-.compact-inspector summary > strong {
+-  display: inline-grid;
+-  min-width: 2.1rem;
+-  min-height: 2.1rem;
+-  place-items: center;
+-  border: 1px solid rgba(105, 247, 255, 0.28);
+-  color: var(--cyan);
++.selection-actions button {
++  display: inline-flex;
++  align-items: center;
++  gap: 6px;
++  padding: 7px 10px;
++  font-size: 0.7rem;
 +}
 +
- .selection-actions button {
-   display: inline-flex;
-   align-items: center;
-@@ -1710,8 +1859,7 @@ button:disabled {
++.selection-action-pin {
++  justify-content: center;
++  min-width: 38px;
++  padding-inline: 8px;
++}
++
++.selection-action-pin--active {
++  border-color: rgba(183, 255, 74, 0.42);
++  background: rgba(183, 255, 74, 0.1);
++  color: var(--phosphor);
++}
++
++.pin-glyph {
++  width: 1rem;
++  height: 1rem;
++  display: block;
++  fill: currentColor;
++}
++
++/* Readings: a wrapping row of label/value pairs that never split mid-pair. */
++.radio-summary {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 2px 14px;
++  margin: 0;
++  min-width: 0;
++}
++
++.radio-summary div {
++  display: flex;
++  align-items: baseline;
++  gap: 5px;
++  border: 0;
++  padding: 0;
++  background: none;
++  white-space: nowrap;
++}
++
++.radio-summary dt {
++  color: var(--muted);
++  font-size: 0.66rem;
++  font-weight: 900;
++  letter-spacing: 0.1em;
++  text-transform: uppercase;
++}
++
++.radio-summary dd {
++  margin: 0;
++  color: var(--phosphor);
+   font-size: 0.82rem;
++  font-weight: 900;
+ }
+ 
+ .compact-inspector__body {
+@@ -1710,8 +1919,7 @@ button:disabled {
  
  @media (max-width: 760px) {
    .readiness-grid,
@@ -2853,10 +4482,324 @@ index e3abf64..4854c9d 100644
    }
  }
 diff --git a/vendor/swarm-sim/tests/e2e/core-canvas.spec.ts b/vendor/swarm-sim/tests/e2e/core-canvas.spec.ts
-index a3cef90..3dadccf 100644
+index a3cef90..bb77aba 100644
 --- a/vendor/swarm-sim/tests/e2e/core-canvas.spec.ts
 +++ b/vendor/swarm-sim/tests/e2e/core-canvas.spec.ts
-@@ -1090,8 +1090,8 @@ test.describe('core canvas workflows', () => {
+@@ -75,7 +75,21 @@ async function updateSelectedMakeCodeSource(page: Page, deviceName: string, sour
+   await expect(sourceField).toBeVisible();
+   await sourceField.fill(source);
+   await page.getByRole('button', { name: 'Save changes' }).click();
+-  await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
++  await expect(page.getByRole('dialog', { name: `Code editor for ${deviceName}` })).toHaveCount(0);
++}
++
++async function expectSelectedCodeName(page: Page, filename: string) {
++  await expect(page.locator('.selection-code__name')).toHaveText(filename, { timeout: 15_000 });
++}
++
++async function openRuntimeLog(page: Page) {
++  await page.getByRole('button', { name: 'Runtime log' }).click();
++  await expect(page.locator('#runtime-log-dialog')).toHaveAttribute('open', '');
++}
++
++async function closeRuntimeLog(page: Page) {
++  await page.getByRole('button', { name: 'Close runtime log' }).click();
++  await expect(page.locator('#runtime-log-dialog')).not.toHaveAttribute('open', '');
+ }
+ 
+ async function waitForMakeCodeRuntimeReady(page: Page) {
+@@ -233,13 +247,23 @@ test.describe('core canvas workflows', () => {
+ 
+     await addLockedDeviceFromSwarmTools(page);
+     await expect(page.locator('.selection-name-badge')).toContainText('Locked');
+-    await expect(page.getByText('Code locked after first upload')).toBeVisible();
++    await expect(page.locator('.selection-name-badge')).toHaveAttribute(
++      'title',
++      /uploads and code edits stay locked/,
++    );
++    await expect(page.getByRole('button', { name: 'Upload code' })).toBeVisible();
+ 
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Code locked')).toBeVisible();
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.getByRole('button', { name: 'Edit code' })).toHaveCount(0);
++    await expect(page.getByRole('button', { name: 'Upload code' })).toHaveCount(0);
++    await expect(page.getByRole('button', { name: 'Unload code' })).toHaveCount(0);
++    await expect(page.getByRole('button', { name: 'Reset device' })).toBeEnabled();
+     await expect(page.getByLabel(/Load code onto Node 2/)).toHaveCount(0);
+   });
+ 
+@@ -359,8 +383,12 @@ test.describe('core canvas workflows', () => {
+     await page.locator('.microbit-node').first().click();
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -442,8 +470,12 @@ test.describe('core canvas workflows', () => {
+     await page.locator('.microbit-node').first().click();
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -461,7 +493,7 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+     await expect(page.getByRole('button', { name: 'Edit code' })).toBeEnabled();
+ 
+     await page.getByRole('button', { name: 'Edit code' }).click();
+@@ -471,7 +503,7 @@ test.describe('core canvas workflows', () => {
+     await sourceField.fill('from microbit import *\ndisplay.scroll("edited")\n');
+     await page.getByRole('button', { name: 'Save changes' }).click();
+ 
+-    await expect(page.getByText(/Editable source:/)).toContainText('saved changes ready');
++    await expect(page.getByRole('dialog', { name: 'Code editor for Node 1' })).toHaveCount(0);
+     await page.getByRole('button', { name: 'Edit code' }).click();
+     await expect(page.getByLabel('Editing main.py for Node 1')).toHaveValue(
+       'from microbit import *\ndisplay.scroll("edited")\n',
+@@ -483,7 +515,7 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+     await page.getByRole('button', { name: 'Edit code' }).click();
+ 
+     const sourceField = page.getByLabel('Editing main.py for Node 1');
+@@ -595,11 +627,11 @@ test.describe('core canvas workflows', () => {
+     await expect(page.locator('.microbit-node')).toHaveCount(3);
+     await expect(getSaveCanvasButton(page)).toContainText('Unsaved');
+ 
+-    await page.getByRole('button', { name: 'Reset' }).first().click();
++    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+     await expect(page.locator('.microbit-node')).toHaveCount(3);
+     await expect(getSaveCanvasButton(page)).toContainText('Unsaved');
+ 
+-    await page.getByRole('button', { name: 'Reset' }).first().click();
++    await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
+     await expect(page.locator('.microbit-node')).toHaveCount(2);
+     await expect(getSaveCanvasButton(page)).toContainText('Saved');
+     await expect(page.getByText(/Reset restored saved canvas "/)).toBeVisible();
+@@ -611,18 +643,30 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(2);
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(3);
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -713,18 +757,30 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(2);
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(3);
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -771,7 +827,7 @@ test.describe('core canvas workflows', () => {
+     await selectDeviceNode(page, 0);
+     const selectionResetButton = page
+       .locator('.selection-card')
+-      .getByRole('button', { name: 'Reset', exact: true });
++      .getByRole('button', { name: 'Reset device' });
+     await expect(selectionResetButton).toBeEnabled();
+     await selectionResetButton.click();
+ 
+@@ -816,18 +872,30 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(2);
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 3/).setInputFiles(microPythonFixture);
+     await expect(page.locator('.microbit-node')).toHaveCount(3);
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -881,14 +949,14 @@ test.describe('core canvas workflows', () => {
+     await gotoCanvas(page);
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+ 
+     await getSaveCanvasButton(page).click();
+     await expect(getSaveCanvasButton(page)).toContainText('Saved');
+ 
+     await page.reload();
+ 
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+     await expect(getSaveCanvasButton(page)).toContainText('Saved');
+   });
+ 
+@@ -921,7 +989,7 @@ test.describe('core canvas workflows', () => {
+     await expect(downloadLogsButton).toBeDisabled();
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+     await expect(page.getByLabel('Runtime load results')).toContainText(/loaded|prepared/i, {
+@@ -958,8 +1026,12 @@ test.describe('core canvas workflows', () => {
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonDataLogFixture);
+ 
+-    await expect(page.getByText('Assigned: mp_datalog.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_datalog.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -977,8 +1049,12 @@ test.describe('core canvas workflows', () => {
+     await expect(downloadLogsButton).toBeDisabled();
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeDataLogFixture);
+-    await expect(page.getByText('Assigned: mc_datalog.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_datalog.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -1061,8 +1137,12 @@ test.describe('core canvas workflows', () => {
+ 
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+ 
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[aria-label="MicroPython runtime host"]')).toHaveCount(0);
+     await expect
+       .poll(
+@@ -1084,14 +1164,14 @@ test.describe('core canvas workflows', () => {
+     await page.getByLabel('Edit node name').press('Enter');
+ 
+     await page.getByLabel(/Load code onto Sensors/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
+ 
+     await addDeviceFromSwarmTools(page);
      await page.getByLabel(/Load code onto Node 2/).setInputFiles(microPythonFixture);
      await expect(page.locator('.microbit-node')).toHaveCount(2);
  
@@ -2867,7 +4810,33 @@ index a3cef90..3dadccf 100644
  
      await expect
        .poll(
-@@ -1139,8 +1139,8 @@ test.describe('core canvas workflows', () => {
+@@ -1117,13 +1197,21 @@ test.describe('core canvas workflows', () => {
+ 
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -1139,8 +1227,8 @@ test.describe('core canvas workflows', () => {
        frame.url().includes('/micropython-patched-simulator.html'),
      );
      expect(microPythonSimulator).toBeTruthy();
@@ -2878,7 +4847,7 @@ index a3cef90..3dadccf 100644
      const initialCount = await page.locator('.radio-event__meta').count();
      await emitMicroPythonRadioPacket(microPythonSimulator!);
  
-@@ -1151,6 +1151,8 @@ test.describe('core canvas workflows', () => {
+@@ -1151,6 +1239,8 @@ test.describe('core canvas workflows', () => {
        )
        .toBeGreaterThan(initialCount);
  
@@ -2887,7 +4856,7 @@ index a3cef90..3dadccf 100644
      await page.getByRole('button', { name: 'Reset', exact: true }).first().click();
      await expect
        .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-runner.html')))
-@@ -1165,6 +1167,8 @@ test.describe('core canvas workflows', () => {
+@@ -1165,6 +1255,8 @@ test.describe('core canvas workflows', () => {
        frame.url().includes('/micropython-patched-simulator.html'),
      );
      expect(refreshedMicroPythonSimulator).toBeTruthy();
@@ -2896,3 +4865,286 @@ index a3cef90..3dadccf 100644
      const postResetCount = await page.locator('.radio-event__meta').count();
      await emitMicroPythonRadioPacket(refreshedMicroPythonSimulator!);
  
+@@ -1179,13 +1271,21 @@ test.describe('core canvas workflows', () => {
+   test('keeps runtime radio delivery working after opening and closing debug tools', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -1268,12 +1368,15 @@ test.describe('core canvas workflows', () => {
+   test('coalesces fragmented MicroPython serial output into one runtime log line', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+ 
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+ 
+     await expect.poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html'))).toBe(true);
+     const simulatorFrame = page.frames().find((frame) => frame.url().includes('/micropython-patched-simulator.html'));
+@@ -1295,8 +1398,12 @@ test.describe('core canvas workflows', () => {
+   test('shows per-device sound feedback for MicroPython runtime sound markers', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+ 
+     await expect
+@@ -1309,8 +1416,7 @@ test.describe('core canvas workflows', () => {
+     });
+ 
+     await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
+     await expect(soundLine).toHaveCount(1);
+     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
+@@ -1319,8 +1425,12 @@ test.describe('core canvas workflows', () => {
+   test('logs a later MicroPython sound marker again after the transient window expires', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+ 
+     await expect
+@@ -1332,8 +1442,7 @@ test.describe('core canvas workflows', () => {
+       window.parent.postMessage({ kind: 'serial_output', data: '\x1eSWARM_SOUND:180\n' }, window.location.origin);
+     });
+ 
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 180)' })).toHaveCount(1);
+ 
+     await page.waitForTimeout(800);
+@@ -1347,8 +1456,12 @@ test.describe('core canvas workflows', () => {
+   test('shows per-device sound feedback for MakeCode runtime sound events', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();
+@@ -1377,8 +1490,7 @@ test.describe('core canvas workflows', () => {
+ 
+     await expect(page.locator('[data-runtime-sound-indicator="device-1"]')).toBeVisible();
+     await page.getByRole('button', { name: 'Close debug tools' }).click();
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     const soundLine = page.locator('.device-log__line', { hasText: 'Sound output started' });
+     await expect(soundLine).toHaveCount(1);
+     await expect(soundLine.locator('.device-log__type')).toHaveText('snd');
+@@ -1394,8 +1506,12 @@ test.describe('core canvas workflows', () => {
+ 
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await waitForMakeCodeRuntimeReady(page);
+ 
+     expect(
+@@ -1409,13 +1525,21 @@ test.describe('core canvas workflows', () => {
+   test('keeps MakeCode continuous sound active at the configured volume until stopAllSounds', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await addDeviceFromSwarmTools(page);
+     await page.getByLabel(/Load code onto Node 2/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await selectDeviceNode(page, 0);
+     await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeContinuousSoundProgram);
+@@ -1432,9 +1556,9 @@ test.describe('core canvas workflows', () => {
+     await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toBeVisible();
+ 
+     await selectDeviceNode(page, 0);
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     await expect(page.locator('.device-log__line', { hasText: 'Sound output started (level 127)' })).toHaveCount(1);
++    await closeRuntimeLog(page);
+ 
+     await selectDeviceNode(page, 1);
+     await dragDeviceNodeBy(page, 1, { x: 220, y: 0 });
+@@ -1448,8 +1572,12 @@ test.describe('core canvas workflows', () => {
+   test('keeps muted MakeCode sound from emitting runtime sound activity', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await updateSelectedMakeCodeSource(page, 'Node 1', makeCodeMutedContinuousSoundProgram);
+     await waitForMakeCodeRuntimeReady(page);
+@@ -1458,16 +1586,19 @@ test.describe('core canvas workflows', () => {
+     await page.waitForTimeout(800);
+     await expect(page.locator('[data-runtime-sound-radius="device-1"]')).toHaveCount(0);
+ 
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     await expect(page.locator('.device-log__line', { hasText: 'Sound output started' })).toHaveCount(0);
+   });
+ 
+   test('lets nearby devices pick up transient runtime sound from another micro:bit', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+ 
+     await addDeviceFromSwarmTools(page);
+@@ -1492,8 +1623,12 @@ test.describe('core canvas workflows', () => {
+   test('surfaces runtime internal errors as device error state and clears on reset', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+     await expect(page.locator('[data-runtime-state="device-1:ready"]')).toBeVisible({ timeout: 15_000 });
+ 
+     await expect
+@@ -1523,8 +1658,12 @@ test.describe('core canvas workflows', () => {
+ 
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(microPythonFixture);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Swarm tools' }).click();
+     await page.getByRole('button', { name: 'Save to browser' }).click({ force: true });
+@@ -1536,8 +1675,12 @@ test.describe('core canvas workflows', () => {
+ 
+     await loadButton.click();
+     await expect(page.locator('.microbit-node')).toHaveCount(1);
+-    await expect(page.getByText('Assigned: mp_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: micropython')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mp_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/micropython-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+   });
+ 
+   test('supports permanent A+B canvas button control with linked indicator lines', async ({ page }) => {
+@@ -1547,8 +1690,7 @@ test.describe('core canvas workflows', () => {
+     await expect(abButton).toBeVisible();
+     await expect(page.locator('[data-device-button-combo-link="device-1"]')).toBeVisible();
+ 
+-    const eventLog = page.getByLabel('Event log for Node 1');
+-    await eventLog.locator('summary').click();
++    await openRuntimeLog(page);
+     await abButton.click();
+ 
+     await expect(page.locator('.device-log__line', { hasText: 'Button A pressed' })).toHaveCount(1);
+@@ -1558,8 +1700,12 @@ test.describe('core canvas workflows', () => {
+   test('sends one MakeCode AB click event per canvas A+B press', async ({ page }) => {
+     await gotoCanvas(page);
+     await page.getByLabel(/Load code onto Node 1/).setInputFiles(makeCodeBeaconFixture);
+-    await expect(page.getByText('Assigned: mc_beacon.hex')).toBeVisible({ timeout: 15_000 });
+-    await expect(page.getByText('Runtime source: makecode-pxt')).toBeVisible({ timeout: 15_000 });
++    await expectSelectedCodeName(page, 'mc_beacon.hex');
++    await expect
++      .poll(() => page.frames().some((frame) => frame.url().includes('/makecode-patched-simulator.html')), {
++        timeout: 20_000,
++      })
++      .toBe(true);
+ 
+     await page.getByRole('button', { name: 'Debug' }).click();
+     await expect(page.getByRole('dialog', { name: 'Debug tools' })).toBeVisible();

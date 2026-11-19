@@ -895,31 +895,27 @@ body {
   font-family: Georgia, 'Times New Roman', serif;
 }
 
-/* Auto height + a 360px main track: short desktop windows scroll instead of
-   clipping the canvas controls, and the 300px simulator iframe stays reachable. */
-#app { display: grid; grid-template-rows: auto auto minmax(360px, 1fr) auto; min-height: 100vh; height: auto; min-width: 320px; }
-.activity-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 72px; padding: 11px clamp(16px, 2.4vw, 32px); background: var(--forest); color: #fffdf2; }
-.activity-title-lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.activity-title-lockup h1 { overflow: hidden; margin-top: 3px; color: #fffdf2; font: 600 clamp(19px, 2vw, 25px)/1.1 Georgia, 'Times New Roman', serif; text-overflow: ellipsis; white-space: nowrap; }
-.brand-mark { display: grid; grid-template-columns: repeat(3, 7px); align-items: center; gap: 3px; width: 34px; height: 34px; padding: 0 6px; border: 1px solid rgba(215,233,109,.7); border-radius: 50%; }
-.brand-mark span { width: 6px; height: 6px; border-radius: 50%; background: var(--acid); }
-.brand-mark span:nth-child(2) { width: 9px; height: 9px; background: #f3f0db; }
+/* One full-height simulator track plus one checklist track. The mission/hints row
+   keeps its natural height; if the SCO cannot fit both, the whole document scrolls
+   rather than clipping the simulator. */
+#app { display: grid; grid-template-rows: auto minmax(360px, 1fr); height: 100dvh; min-height: 0; }
+
 .eyebrow { color: var(--muted); font: 700 9px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .12em; text-transform: uppercase; }
-.activity-header .eyebrow { color: var(--acid); }
-.status-bar { flex: 0 0 auto; padding: 7px 11px; border: 1px solid rgba(255,255,255,.18); border-radius: 3px; font: 10px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: left; }
-.status-info { background: rgba(255,255,255,.08); color: #f1f2e6; }
-.status-success { background: rgba(215,233,109,.15); color: var(--acid); }
-.status-error { background: rgba(208,107,78,.2); color: #ffd5c8; }
-.status-warning { background: rgba(233,205,113,.16); color: #f2dfa3; }
+
+.status-bar { flex: 0 0 auto; margin-top: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 3px; font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace; text-align: left; overflow-wrap: anywhere; }
+.status-info { background: #f3f4ec; border-color: #dde3d9; color: #4d5f56; }
+.status-success { background: #edf3e7; border-color: #bfd1ae; color: #517447; }
+.status-error { background: #f8eee8; border-color: #e6c5b6; color: #a34a32; }
+.status-warning { background: #f6f0da; border-color: #e3d3a0; color: #7d6420; }
 
 .instruction-strip { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr); gap: 12px; padding: 12px clamp(12px, 1.7vw, 22px); border-bottom: 1px solid var(--line); background: rgba(251,250,244,.88); }
-.instruction-panel, .hint-panel, .learner-panel { min-width: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
+.instruction-panel, .hint-panel { min-width: 0; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); }
 .instruction-panel { overflow: auto; max-height: 166px; padding: 13px 16px; }
-.instruction-panel .eyebrow, .hint-panel .eyebrow, .learner-panel .eyebrow { color: var(--blue); }
+.instruction-panel .eyebrow, .hint-panel .eyebrow { color: var(--blue); }
 .formatted-text { margin-top: 6px; color: #33483e; font: 14px/1.55 Georgia, 'Times New Roman', serif; white-space: pre-wrap; }
 .formatted-text code { padding: 1px 4px; border-radius: 2px; background: #edf0e6; color: var(--forest); font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .hint-panel { display: flex; flex-direction: column; max-height: 166px; overflow: auto; padding: 12px 14px; }
-.panel-title-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 7px; }
+.panel-title-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-width: 0; margin-bottom: 7px; }
 .panel-title-row h2 { margin-top: 2px; color: var(--ink); font: 600 17px/1.1 Georgia, 'Times New Roman', serif; }
 .count-badge { display: grid; place-items: center; min-width: 23px; height: 23px; padding: 0 5px; border-radius: 99px; background: #e9eee7; color: var(--forest); font: 700 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .hint-empty, .empty-note { color: var(--muted); font: 11px/1.4 Georgia, 'Times New Roman', serif; }
@@ -932,18 +928,12 @@ body {
 .hint-card[data-style="success"] { border-color: #bfd1ae; background: #edf3e7; }
 #btn-request-hint { align-self: start; min-height: 29px; margin-top: 7px; padding: 6px 10px; font-size: 10px; }
 
-.activity-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(285px, 350px); gap: 12px; min-height: 0; padding: 0 clamp(12px, 1.7vw, 22px) 12px; }
-.simulator-panel { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--paper); box-shadow: var(--shadow); }
-.simulator-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 13px; border-bottom: 1px solid var(--line); }
-.simulator-status { color: var(--muted); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; }
-#simulator-frame { width: 100%; height: 100%; min-height: 300px; border: 0; background: #fff; }
-.activity-sidebar { display: grid; grid-template-rows: minmax(0, .85fr) minmax(0, 1.15fr); gap: 12px; min-height: 0; }
-.learner-panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; padding: 12px; box-shadow: var(--shadow); }
-.event-log, .test-checklist { display: flex; flex-direction: column; gap: 5px; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
-.event-log li { padding: 7px 8px; border-left: 2px solid var(--blue); background: #f3f4ec; color: #4d5f56; font: 9px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
-.event-log li[data-kind="radio-rx"] { border-left-color: var(--coral); }
-.event-log li[data-kind="button"] { border-left-color: #a4b940; }
-.test-row { display: flex; align-items: flex-start; gap: 8px; padding: 7px 8px; border: 1px solid #e4e2d7; border-radius: 3px; background: #fbfaf4; }
+.activity-layout { display: grid; grid-template-columns: minmax(0, 1fr) clamp(240px, 25vw, 320px); gap: 0; min-height: 0; padding: 0; }
+.simulator-panel { display: block; min-width: 0; min-height: 0; overflow: hidden; background: var(--paper); }
+#simulator-frame { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+.checklist-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; padding: 12px; border-left: 1px solid var(--line); background: var(--paper); box-shadow: var(--shadow); }
+.test-checklist { display: flex; flex: 1; flex-direction: column; gap: 5px; min-width: 0; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
+.test-row { display: flex; align-items: flex-start; gap: 8px; min-width: 0; padding: 7px 8px; border: 1px solid #e4e2d7; border-radius: 3px; background: #fbfaf4; }
 .test-row[data-passed="true"] { border-color: #bfd1ae; background: #edf3e7; }
 .test-row-mark { flex: 0 0 auto; color: #8a988e; font: 700 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .test-row[data-passed="true"] .test-row-mark { color: #517447; }
@@ -954,35 +944,26 @@ body {
 .test-row[data-status="failed"] { border-color: var(--coral); background: #f7ede8; }
 .test-row[data-status="running"] .test-row-mark { color: var(--blue); }
 .test-result-detail { color: var(--coral) !important; font-weight: 700; }
-.check-feedback { margin-top: 7px; color: var(--muted); font: 10px/1.4 Georgia, 'Times New Roman', serif; }
 
-.activity-footer { display: grid; grid-template-columns: minmax(140px, .45fr) auto minmax(220px, 1fr); align-items: center; gap: 18px; padding: 10px clamp(16px, 2.4vw, 32px); border-top: 1px solid var(--line); background: var(--paper); }
-.footer-score { display: grid; gap: 2px; }
-.footer-score .eyebrow { color: var(--blue); }
-.footer-score strong { color: var(--forest); font: 700 19px ui-monospace, SFMono-Regular, Menlo, monospace; }
-.footer-actions { display: flex; gap: 8px; }
-.activity-footer .btn { min-height: 36px; padding: 8px 15px; border: 1px solid transparent; border-radius: 3px; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
-.activity-footer .btn-primary { background: var(--forest); color: #fffdf2; }
-.activity-footer .btn-primary:hover { background: var(--forest-deep); }
-.activity-footer .btn-secondary { border-color: var(--line); background: var(--paper-warm); color: var(--ink); }
-.pass-status { justify-self: end; color: var(--muted); font: 11px/1.4 Georgia, 'Times New Roman', serif; text-align: right; }
+/* Actions and the live region sit below the scrolling list so a long checklist
+   never hides Check or the latest status. */
+.checklist-actions { display: flex; flex: 0 0 auto; gap: 8px; min-width: 0; padding-top: 10px; }
+.checklist-actions .btn { flex: 1 1 0; min-width: 0; min-height: 36px; padding: 8px 12px; border: 1px solid transparent; border-radius: 3px; font: 700 10px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.checklist-actions .btn-primary { background: var(--forest); color: #fffdf2; }
+.checklist-actions .btn-primary:hover:not(:disabled) { background: var(--forest-deep); }
+.checklist-actions .btn-secondary { border-color: var(--line); background: var(--paper-warm); color: var(--ink); }
 
 @media (max-width: 980px) {
-  body { height: auto; min-height: 100vh; overflow: auto; }
-  #app { height: auto; min-height: 100vh; grid-template-rows: auto auto auto auto; }
+  #app { height: auto; min-height: 100dvh; grid-template-rows: auto auto; }
   .instruction-strip { grid-template-columns: 1fr; }
   .instruction-panel, .hint-panel { max-height: none; }
-  .activity-layout { grid-template-columns: 1fr; }
-  .simulator-panel { min-height: 650px; }
-  #simulator-frame { min-height: 600px; }
-  .activity-sidebar { grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: 270px; }
+  .activity-layout { grid-template-columns: minmax(0, 1fr); }
+  .simulator-panel { height: clamp(360px, 65dvh, 600px); }
+  .checklist-panel { overflow: visible; border-top: 1px solid var(--line); border-left: 0; }
+  .test-checklist { flex: 0 0 auto; overflow: visible; }
 }
 
 @media (max-width: 650px) {
-  .activity-header { align-items: flex-start; flex-direction: column; }
   .status-bar { align-self: stretch; }
-  .activity-sidebar { grid-template-columns: 1fr; grid-template-rows: 240px 300px; }
-  .activity-footer { grid-template-columns: 1fr auto; gap: 8px; }
-  .pass-status { grid-column: 1 / -1; justify-self: start; text-align: left; }
-  .footer-actions { justify-content: flex-end; }
+  .checklist-actions { flex-wrap: wrap; }
 }

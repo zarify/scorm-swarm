@@ -31,7 +31,6 @@ const seenSimulatorPayloads = new WeakSet();
 let grader = createGrader();
 let hintState = createHintState();
 let latestHintResult = { visibleHints: [], nextEvaluationDelayMs: null };
-let eventLog = [];
 let hintTimer;
 const hintDebouncer = createHintEventDebouncer(evaluateHintEvent, 250);
 
@@ -53,7 +52,6 @@ export function initPreviewTab() {
   onSceneChange(() => {
     void connectPreview({ reset: true });
   });
-  renderEventLog();
   renderGrades(null);
   renderHints();
 }
@@ -201,12 +199,10 @@ function resetPreviewState() {
   grader.reset();
   hintState = createHintState();
   latestHintResult = { visibleHints: [], nextEvaluationDelayMs: null };
-  eventLog = [];
   runProgress = new Map();
   hintDebouncer.cancel();
   clearTimeout(hintTimer);
   hintTimer = undefined;
-  renderEventLog();
   renderGrades(null);
   evaluateHintEvent({ type: 'timer' });
 }
@@ -268,9 +264,6 @@ function handleSimulatorEvent(payload, sourceBridge = bridge) {
     hintState = createHintState();
     hintDebouncer.cancel();
   }
-  eventLog.push(payload);
-  if (eventLog.length > 100) eventLog.shift();
-  renderEventLog();
   hintDebouncer.push({ type: 'sim_event', payload });
 }
 
@@ -331,25 +324,6 @@ function evaluateHintEvent(event) {
       () => evaluateHintEvent({ type: 'timer' }),
       latestHintResult.nextEvaluationDelayMs,
     );
-  }
-}
-
-function renderEventLog() {
-  const list = document.getElementById('preview-event-log');
-  list.replaceChildren();
-  document.getElementById('preview-event-count').textContent = String(eventLog.length);
-  if (eventLog.length === 0) {
-    const empty = document.createElement('li');
-    empty.className = 'event-log-empty';
-    empty.textContent = 'No simulator events yet.';
-    list.append(empty);
-    return;
-  }
-  for (const payload of eventLog.slice(-60).reverse()) {
-    const line = document.createElement('li');
-    line.dataset.kind = payload.event.kind;
-    line.textContent = formatEvent(payload);
-    list.append(line);
   }
 }
 
@@ -421,31 +395,6 @@ function renderHints() {
     if (hint.show_once && hint.triggered && hint.display_mode !== 'checklist') {
       consumeHint(hintState, hint.id);
     }
-  }
-}
-
-function formatEvent(payload) {
-  const event = payload.event;
-  const time = new Date(payload.ts).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-  switch (event.kind) {
-    case 'serial':
-      return `${time} · ${event.device_id} · serial: ${event.text}`;
-    case 'button':
-      return `${time} · ${event.device_id} · ${event.button} ${event.pressed ? 'pressed' : 'released'}`;
-    case 'radio-tx':
-      return `${time} · ${event.device_id} · radio TX group ${event.packet.group ?? '—'} / ch ${event.packet.channel ?? '—'}`;
-    case 'radio-rx':
-      return `${time} · ${event.device_id} ← ${event.from_device_id} · radio RX RSSI ${event.rssi}`;
-    case 'radio-blocked':
-      return `${time} · ${event.device_id} · radio blocked: ${event.reason}`;
-    case 'sensor':
-      return `${time} · ${event.device_id} · ${event.sensor} = ${event.value}`;
-    case 'display':
-      return `${time} · ${event.device_id} · display ${event.pixels.filter((pixel) => pixel > 0).length} lit`;
-    case 'code-load':
-      return `${time} · ${event.device_id} · program loaded (evidence reset)`;
-    default:
-      return `${time} · ${event.kind}`;
   }
 }
 
