@@ -41,7 +41,7 @@ const state = {
                 case_sensitive: true,
                 min_count: 1,
               },
-              timeout_seconds: 5,
+              timeout_ms: 5000,
             },
           ],
         },

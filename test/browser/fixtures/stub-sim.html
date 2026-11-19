@@ -34,6 +34,10 @@
       let currentBundle = pendingScene;
       let currentDisplay = new Array(25).fill(0);
       let replayed = false;
+      const positions = {
+        device: { alice: { x: 120, y: 140 }, bob: { x: 300, y: 200 } },
+        source: { lamp: { x: 160, y: 160 } },
+      };
 
       function send(type, payload, id) {
         window.parent.postMessage({
@@ -93,6 +97,7 @@
           document.getElementById('simulator-status').textContent = `panels: ${enabled.join(',')}`;
         } else if (message.type === 'press-button') {
           receiveButton(payload);
+          send('ack', {}, message.id);
         } else if (message.type === 'radio-broadcast') {
           const packet = {
             data_b64: payload.payload_b64,
@@ -102,10 +107,30 @@
           };
           emit({ kind: 'radio-tx', device_id: payload.device_id, packet });
           emitRadioReception(payload.device_id, packet);
+          send('ack', {}, message.id);
         } else if (message.type === 'set-node-level') {
           document.getElementById('simulator-status').textContent = `node ${payload.node_id} level ${payload.value}`;
+          send('ack', {}, message.id);
+        } else if (message.type === 'move-node') {
+          if (!positions.source[payload.node_id]) {
+            send('error', { message: `Unknown environment node: ${payload.node_id}` }, message.id);
+            return;
+          }
+          positions.source[payload.node_id] = { x: payload.x, y: payload.y };
+          document.getElementById('simulator-status').textContent =
+            `moved ${payload.node_id} to ${payload.x},${payload.y}`;
+          send('ack', {}, message.id);
         } else if (message.type === 'add-node') {
           document.getElementById('simulator-status').textContent = `added ${payload.node_type} at ${payload.x},${payload.y}`;
+          send('ack', {}, message.id);
+        } else if (message.type === 'get-node-positions') {
+          const nodes = payload.nodes || [];
+          send('node-positions', {
+            positions: nodes.flatMap((node) => {
+              const position = (positions[node.kind] || {})[node.id];
+              return position ? [{ kind: node.kind, id: node.id, x: position.x, y: position.y }] : [];
+            }),
+          }, message.id);
         } else if (message.type === 'get-display') {
           send('display', { displays: { alice: currentDisplay.slice() } }, message.id);
         } else if (message.type === 'get-bundle') {

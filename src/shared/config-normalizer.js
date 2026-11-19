@@ -19,8 +19,11 @@ const DEFAULT_PANEL_VISIBILITY = {
   radio_inspector: true,
   runtime_log: false,
   environment_values: true,
+  node_coordinates: false,
   panel_header: false,
 };
+
+const DEFAULT_CHECK_TIMEOUT_MS = 5000;
 
 export function normalizeConfig(rawConfig) {
   if (!isObject(rawConfig)) return rawConfig;
@@ -83,6 +86,8 @@ export function normalizeCondition(condition) {
       return addDefaults(normalized, { min: null, max: null, min_duration_seconds: 0 });
     case 'led_display':
       return addDefaults(normalized, { device_id: null });
+    case 'node_distance':
+      return addDefaults(normalized, { min: null, max: null });
     default:
       return normalized;
   }
@@ -143,13 +148,34 @@ function normalizeTestStep(step) {
       : step;
   }
   if (step.type === 'check') {
-    const normalized = addDefaults(step, { timeout_seconds: 5 });
-    if (isObject(step.condition)) {
-      normalized.condition = normalizeCondition(step.condition);
+    const normalized = normalizeCheckTimeout(step);
+    if (isObject(normalized.condition)) {
+      normalized.condition = normalizeCondition(normalized.condition);
     }
     return normalized;
   }
   return step;
+}
+
+/**
+ * Migrate a saved `timeout_seconds` to canonical `timeout_ms` exactly once.
+ * A malformed or duplicated legacy key is left untouched so strict validation
+ * rejects it instead of silently falling back to the default.
+ */
+function normalizeCheckTimeout(step) {
+  const normalized = { ...step };
+  const hasSeconds = Object.prototype.hasOwnProperty.call(step, 'timeout_seconds');
+  const hasMilliseconds = Object.prototype.hasOwnProperty.call(step, 'timeout_ms');
+  if (!hasSeconds && !hasMilliseconds) {
+    normalized.timeout_ms = DEFAULT_CHECK_TIMEOUT_MS;
+    return normalized;
+  }
+  if (hasSeconds && !hasMilliseconds && typeof step.timeout_seconds === 'number' &&
+      Number.isFinite(step.timeout_seconds)) {
+    normalized.timeout_ms = step.timeout_seconds * 1000;
+    delete normalized.timeout_seconds;
+  }
+  return normalized;
 }
 
 function normalizeHint(hint) {

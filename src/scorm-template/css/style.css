@@ -885,8 +885,8 @@ body.modal-open {
 
 * { box-sizing: border-box; }
 body {
-  height: 100vh;
-  overflow: hidden;
+  min-height: 100vh;
+  overflow: auto;
   background-color: var(--paper-warm);
   background-image: linear-gradient(rgba(28, 55, 46, .035) 1px, transparent 1px),
     linear-gradient(90deg, rgba(28, 55, 46, .035) 1px, transparent 1px);
@@ -895,7 +895,9 @@ body {
   font-family: Georgia, 'Times New Roman', serif;
 }
 
-#app { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; height: 100vh; min-width: 320px; }
+/* Auto height + a 360px main track: short desktop windows scroll instead of
+   clipping the canvas controls, and the 300px simulator iframe stays reachable. */
+#app { display: grid; grid-template-rows: auto auto minmax(360px, 1fr) auto; min-height: 100vh; height: auto; min-width: 320px; }
 .activity-header { display: flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 72px; padding: 11px clamp(16px, 2.4vw, 32px); background: var(--forest); color: #fffdf2; }
 .activity-title-lockup { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .activity-title-lockup h1 { overflow: hidden; margin-top: 3px; color: #fffdf2; font: 600 clamp(19px, 2vw, 25px)/1.1 Georgia, 'Times New Roman', serif; text-overflow: ellipsis; white-space: nowrap; }

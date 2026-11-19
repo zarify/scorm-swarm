@@ -35,7 +35,7 @@ function makeConfig() {
                 case_sensitive: true,
                 min_count: 1,
               },
-              timeout_seconds: 5,
+              timeout_ms: 5000,
             },
           ],
         },
@@ -60,6 +60,7 @@ test('demo activity validates after documented defaults are normalized', () => {
     radio_inspector: true,
     runtime_log: false,
     environment_values: true,
+    node_coordinates: false,
     panel_header: false,
   });
   assert.equal(Object.hasOwn(config.evaluation, 'pass_threshold'), false);
@@ -101,7 +102,7 @@ test('normalizer fills scripted test defaults', () => {
     count: 1,
     interval_ms: 0,
   });
-  assert.equal(testCase.steps[0].timeout_seconds, 5);
+  assert.equal(testCase.steps[0].timeout_ms, 5000);
   assert.equal(testCase.steps[0].condition.device_id, null);
 });
 
@@ -146,11 +147,11 @@ test('validator rejects legacy effect-type test cases', () => {
   assert.ok(legacy.errors.some((error) => error.path.endsWith('.steps') && /required/.test(error.message)));
 });
 
-test('trigger and steps must be non-empty arrays', () => {
+test('trigger may be empty but is required; steps must be non-empty', () => {
   const emptyTrigger = invalidConfig((config) => {
     config.evaluation.test_cases[0].trigger = [];
   });
-  assert.ok(emptyTrigger.errors.some((error) => error.path.endsWith('.trigger') && /at least one action/.test(error.message)));
+  assert.deepEqual(emptyTrigger, { valid: true, errors: [] });
 
   const emptySteps = invalidConfig((config) => {
     config.evaluation.test_cases[0].steps = [];
@@ -226,9 +227,14 @@ test('action validation enforces targets, enums, and bounds', () => {
 
 test('check steps validate conditions and timeouts; action steps validate actions', () => {
   const badTimeout = invalidConfig((config) => {
-    config.evaluation.test_cases[0].steps[0].timeout_seconds = -1;
+    config.evaluation.test_cases[0].steps[0].timeout_ms = -1;
   });
-  assert.ok(badTimeout.errors.some((error) => error.path.endsWith('.timeout_seconds')));
+  assert.ok(badTimeout.errors.some((error) => error.path.endsWith('.timeout_ms')));
+
+  const legacyTimeout = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].timeout_seconds = 5;
+  });
+  assert.ok(legacyTimeout.errors.some((error) => error.path.endsWith('.timeout_seconds') && /not allowed/.test(error.message)));
 
   const unknownStepKey = invalidConfig((config) => {
     config.evaluation.test_cases[0].steps[0].conditions = {};
@@ -341,4 +347,205 @@ test('validator rejects empty composites, duplicate ids, and activities without 
     config.evaluation.test_cases = [];
   });
   assert.ok(noTests.errors.some((error) => /at least one test case/.test(error.message)));
+});
+
+test('legacy check seconds migrate to canonical milliseconds exactly once', () => {
+  const legacy = normalizeConfig({
+    metadata: { activity_id: 'legacy' },
+    evaluation: {
+      test_cases: [{
+        id: 'legacy-case',
+        trigger: [],
+        steps: [{
+          type: 'check',
+          condition: { type: 'serial_output', device_id: null, match: 'contains', value: 'x' },
+          timeout_seconds: 0.125,
+        }],
+      }],
+    },
+  });
+  const migrated = legacy.evaluation.test_cases[0].steps[0];
+  assert.equal(migrated.timeout_ms, 125);
+  assert.equal(Object.hasOwn(migrated, 'timeout_seconds'), false);
+  assert.deepEqual(validateConfig(legacy), { valid: true, errors: [] });
+
+  // Re-normalizing a migrated step never doubles the value.
+  assert.equal(normalizeConfig(legacy).evaluation.test_cases[0].steps[0].timeout_ms, 125);
+
+  const missing = normalizeConfig({
+    metadata: { activity_id: 'missing' },
+    evaluation: {
+      test_cases: [{
+        id: 'missing-case',
+        trigger: [],
+        steps: [{ type: 'check', condition: { type: 'serial_output', device_id: null, match: 'contains', value: 'x' } }],
+      }],
+    },
+  });
+  assert.equal(missing.evaluation.test_cases[0].steps[0].timeout_ms, 5000);
+
+  const bothKeys = normalizeConfig({
+    metadata: { activity_id: 'both' },
+    evaluation: {
+      test_cases: [{
+        id: 'both-case',
+        trigger: [],
+        steps: [{
+          type: 'check',
+          condition: { type: 'serial_output', device_id: null, match: 'contains', value: 'x' },
+          timeout_seconds: 5,
+          timeout_ms: 5000,
+        }],
+      }],
+    },
+  });
+  const bothResult = validateConfig(bothKeys);
+  assert.equal(bothResult.valid, false);
+  assert.ok(bothResult.errors.some((error) => error.path.endsWith('.timeout_seconds') && /not allowed/.test(error.message)));
+
+  const malformed = normalizeConfig({
+    metadata: { activity_id: 'malformed' },
+    evaluation: {
+      test_cases: [{
+        id: 'malformed-case',
+        trigger: [],
+        steps: [{
+          type: 'check',
+          condition: { type: 'serial_output', device_id: null, match: 'contains', value: 'x' },
+          timeout_seconds: 'fast',
+        }],
+      }],
+    },
+  });
+  assert.equal(validateConfig(malformed).valid, false);
+  assert.equal(Object.hasOwn(malformed.evaluation.test_cases[0].steps[0], 'timeout_ms'), false);
+
+  const fractional = normalizeConfig({
+    metadata: { activity_id: 'fractional' },
+    evaluation: {
+      test_cases: [{
+        id: 'fractional-case',
+        trigger: [],
+        steps: [{
+          type: 'check',
+          condition: { type: 'serial_output', device_id: null, match: 'contains', value: 'x' },
+          timeout_ms: 62.5,
+        }],
+      }],
+    },
+  });
+  assert.deepEqual(validateConfig(fractional), { valid: true, errors: [] });
+});
+
+test('move_node requires an environment node and in-bounds coordinates', () => {
+  const valid = invalidConfig((config) => {
+    config.evaluation.test_cases[0].trigger.push({ type: 'move_node', node_id: 'light-1', x: 0, y: 520 });
+  });
+  assert.deepEqual(valid, { valid: true, errors: [] });
+
+  const blankNode = invalidConfig((config) => {
+    config.evaluation.test_cases[0].trigger.push({ type: 'move_node', node_id: '  ', x: 1, y: 2 });
+  });
+  assert.ok(blankNode.errors.some((error) => error.path.endsWith('.node_id') && /scene node/.test(error.message)));
+
+  const outOfBounds = invalidConfig((config) => {
+    config.evaluation.test_cases[0].trigger.push({ type: 'move_node', node_id: 'light-1', x: 861, y: 2 });
+  });
+  assert.ok(outOfBounds.errors.some((error) => error.path.endsWith('.x') && /between 0 and 860/.test(error.message)));
+
+  const missingY = invalidConfig((config) => {
+    config.evaluation.test_cases[0].trigger.push({ type: 'move_node', node_id: 'light-1', x: 1 });
+  });
+  assert.ok(missingY.errors.some((error) => error.path.endsWith('.y') && /finite number/.test(error.message)));
+});
+
+test('node_distance is a check-only leaf with validated endpoints and bounds', () => {
+  const distance = (overrides = {}) => ({
+    type: 'node_distance',
+    node_a: { kind: 'source', id: 'light-1' },
+    node_b: { kind: 'source', id: 'light-2' },
+    min: null,
+    max: 5,
+    ...overrides,
+  });
+
+  const nested = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = {
+      type: 'all',
+      conditions: [distance()],
+    };
+  });
+  assert.deepEqual(nested, { valid: true, errors: [] });
+
+  const duplicate = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ node_b: { kind: 'source', id: 'light-1' } });
+  });
+  assert.ok(duplicate.errors.some((error) => /must be different objects/.test(error.message)));
+
+  // The same id on a different object kind is a different node.
+  const crossKind = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ node_b: { kind: 'device', id: 'light-1' } });
+  });
+  assert.deepEqual(crossKind, { valid: true, errors: [] });
+
+  const bothBoundsWrong = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ min: 10, max: 5 });
+  });
+  assert.ok(bothBoundsWrong.errors.some((error) => /min must be less than or equal to max/.test(error.message)));
+
+  const negative = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ min: -1 });
+  });
+  assert.ok(negative.errors.some((error) => error.path.endsWith('.min')));
+
+  const noBounds = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ max: null });
+  });
+  assert.ok(noBounds.errors.some((error) => /needs a minimum or maximum distance/.test(error.message)));
+
+  const blankId = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = distance({ node_a: { kind: 'source', id: '' } });
+  });
+  assert.ok(blankId.errors.some((error) => error.path.endsWith('.node_a.id')));
+
+  const hintUse = invalidConfig((config) => {
+    config.hints = [{
+      id: 'hint-1',
+      message: 'Look',
+      trigger: { event: 'sim_event', conditions: distance(), after_attempts: 0, invalidate_on_condition_false: false },
+    }];
+  });
+  assert.ok(hintUse.errors.some((error) =>
+    error.path.includes('trigger.conditions') && /only be used in a test check step/.test(error.message)));
+
+  const hintCompositeUse = invalidConfig((config) => {
+    config.hints = [{
+      id: 'hint-1',
+      message: 'Look',
+      trigger: {
+        event: 'sim_event',
+        conditions: { type: 'any', conditions: [distance()] },
+        after_attempts: 0,
+        invalidate_on_condition_false: false,
+      },
+    }];
+  });
+  assert.ok(hintCompositeUse.errors.some((error) => /only be used in a test check step/.test(error.message)));
+});
+
+test('node coordinates visibility is a boolean panel option defaulting to false', () => {
+  const config = normalizeConfig(makeConfig());
+  assert.equal(config.panel_visibility.node_coordinates, false);
+  assert.deepEqual(validateConfig(config), { valid: true, errors: [] });
+
+  const enabled = invalidConfig((next) => {
+    next.panel_visibility.node_coordinates = true;
+  });
+  assert.deepEqual(enabled, { valid: true, errors: [] });
+
+  const nonBoolean = invalidAfter((next) => {
+    next.panel_visibility.node_coordinates = 'yes';
+  });
+  assert.ok(nonBoolean.errors.some((error) =>
+    error.path === 'panel_visibility.node_coordinates' && /must be a boolean/.test(error.message)));
 });

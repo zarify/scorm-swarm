@@ -10,13 +10,17 @@ const CONDITION_SCHEMAS = {
   radio_rx: schema.$defs.radioRx,
   sensor_reading: schema.$defs.sensorReading,
   led_display: schema.$defs.ledDisplay,
+  node_distance: schema.$defs.nodeDistance,
 };
+
+const CHECK_ONLY_CONDITION_TYPES = ['node_distance'];
 
 const ACTION_SCHEMAS = {
   radio_broadcast: schema.$defs.actionRadioBroadcast,
   press_button: schema.$defs.actionPressButton,
   set_node_level: schema.$defs.actionSetNodeLevel,
   add_node: schema.$defs.actionAddNode,
+  move_node: schema.$defs.actionMoveNode,
 };
 
 const ALLOWED_FIELDS = {
@@ -45,9 +49,11 @@ const ALLOWED_FIELDS = {
     ]),
   ),
   payload: schema.$defs.payloadMatch.properties,
+  nodeRef: schema.$defs.nodeRef.properties,
 };
 
 export const VALID_CONDITION_TYPES = Object.keys(CONDITION_SCHEMAS);
+export const VALID_CHECK_ONLY_CONDITION_TYPES = CHECK_ONLY_CONDITION_TYPES;
 export const VALID_ACTION_TYPES = Object.keys(ACTION_SCHEMAS);
 export const VALID_NODE_TYPES = schema.$defs.actionAddNode.properties.node_type.enum;
 export const VALID_ACTION_BUTTONS = schema.$defs.actionPressButton.properties.button.enum;
@@ -60,6 +66,8 @@ export const VALID_SENSOR_TYPES = schema.$defs.sensorReading.properties.sensor.e
 const STRING_MATCHES = schema.$defs.serialOutput.properties.match.enum;
 const PAYLOAD_MATCHES = schema.$defs.payloadMatch.properties.match.enum;
 const BUTTONS = schema.$defs.buttonPress.properties.button.enum;
+const CANVAS_WIDTH = 860;
+const CANVAS_HEIGHT = 520;
 
 export function validateConfig(config) {
   const errors = [];
@@ -188,8 +196,6 @@ function validateTestCaseInto(testCase, path, errors) {
   }
   if (!Array.isArray(testCase.trigger)) {
     errors.push({ path: `${path}.trigger`, message: 'is required and must be an array' });
-  } else if (testCase.trigger.length < 1) {
-    errors.push({ path: `${path}.trigger`, message: 'must contain at least one action' });
   } else {
     testCase.trigger.forEach((action, index) =>
       validateActionInto(action, `${path}.trigger[${index}]`, errors),
@@ -245,6 +251,17 @@ function validateActionInto(action, path, errors) {
       errors.push({ path: `${path}.value`, message: 'is required and must be a finite number' });
     }
   }
+  if (type === 'move_node') {
+    validateActionTarget(action.node_id, `${path}.node_id`, 'node', errors);
+    for (const [field, maximum] of [['x', CANVAS_WIDTH], ['y', CANVAS_HEIGHT]]) {
+      const value = action[field];
+      if (!isFiniteNumber(value)) {
+        errors.push({ path: `${path}.${field}`, message: 'is required and must be a finite number' });
+      } else if (value < 0 || value > maximum) {
+        errors.push({ path: `${path}.${field}`, message: `must be between 0 and ${maximum}` });
+      }
+    }
+  }
   if (type === 'add_node') {
     if (!VALID_NODE_TYPES.includes(action.node_type)) {
       errors.push({ path: `${path}.node_type`, message: 'must be "light", "sound", "temperature", or "magnet"' });
@@ -283,10 +300,10 @@ function validateStepInto(step, path, errors) {
   if (step.condition === undefined) {
     errors.push({ path: `${path}.condition`, message: 'is required' });
   } else {
-    validateConditionInto(step.condition, `${path}.condition`, errors);
+    validateConditionInto(step.condition, `${path}.condition`, errors, true);
   }
-  if (step.timeout_seconds !== undefined && !isNonNegativeNumber(step.timeout_seconds)) {
-    errors.push({ path: `${path}.timeout_seconds`, message: 'must be a non-negative number' });
+  if (step.timeout_ms !== undefined && !isNonNegativeNumber(step.timeout_ms)) {
+    errors.push({ path: `${path}.timeout_ms`, message: 'must be a non-negative number' });
   }
 }
 
@@ -353,7 +370,7 @@ function validateHintInto(hint, path, errors) {
   }
 }
 
-function validateConditionInto(condition, path, errors) {
+function validateConditionInto(condition, path, errors, allowNodeDistance = false) {
   if (!isObject(condition)) {
     errors.push({ path, message: 'must be an object' });
     return;
@@ -361,6 +378,13 @@ function validateConditionInto(condition, path, errors) {
   const type = condition.type;
   if (!VALID_CONDITION_TYPES.includes(type)) {
     errors.push({ path: `${path}.type`, message: `unknown condition type: ${String(type)}` });
+    return;
+  }
+  if (!allowNodeDistance && CHECK_ONLY_CONDITION_TYPES.includes(type)) {
+    errors.push({
+      path: `${path}.type`,
+      message: `${type} can only be used in a test check step`,
+    });
     return;
   }
   rejectUnknown(condition, ALLOWED_FIELDS.condition[type], path, errors);
@@ -374,8 +398,13 @@ function validateConditionInto(condition, path, errors) {
       errors.push({ path: `${path}.conditions`, message: 'must contain at least one child condition' });
     }
     condition.conditions.forEach((child, index) =>
-      validateConditionInto(child, `${path}.conditions[${index}]`, errors),
+      validateConditionInto(child, `${path}.conditions[${index}]`, errors, allowNodeDistance),
     );
+    return;
+  }
+
+  if (type === 'node_distance') {
+    validateNodeDistance(condition, path, errors);
     return;
   }
 
@@ -436,6 +465,49 @@ function validateConditionInto(condition, path, errors) {
   }
   if (condition.min_duration_seconds !== undefined && !isNonNegativeNumber(condition.min_duration_seconds)) {
     errors.push({ path: `${path}.min_duration_seconds`, message: 'must be a non-negative number' });
+  }
+}
+
+function validateNodeDistance(condition, path, errors) {
+  const endpoints = [];
+  for (const field of ['node_a', 'node_b']) {
+    const ref = condition[field];
+    const refPath = `${path}.${field}`;
+    if (!isObject(ref)) {
+      errors.push({ path: refPath, message: 'is required and must be an object' });
+      endpoints.push(null);
+      continue;
+    }
+    rejectUnknown(ref, ALLOWED_FIELDS.nodeRef, refPath, errors);
+    if (ref.kind !== 'device' && ref.kind !== 'source') {
+      errors.push({ path: `${refPath}.kind`, message: 'must be "device" or "source"' });
+    }
+    if (typeof ref.id !== 'string' || ref.id.trim() === '') {
+      errors.push({ path: `${refPath}.id`, message: 'must be a non-blank scene object id' });
+    }
+    endpoints.push(ref);
+  }
+  if (endpoints[0] && endpoints[1] &&
+      endpoints[0].kind === endpoints[1].kind && endpoints[0].id === endpoints[1].id) {
+    errors.push({ path, message: 'node_a and node_b must be different objects' });
+  }
+
+  const hasMin = condition.min !== undefined && condition.min !== null;
+  const hasMax = condition.max !== undefined && condition.max !== null;
+  for (const field of ['min', 'max']) {
+    if (condition[field] === undefined || condition[field] === null) continue;
+    if (!isFiniteNumber(condition[field])) {
+      errors.push({ path: `${path}.${field}`, message: 'must be a finite number or null' });
+    } else if (condition[field] < 0) {
+      errors.push({ path: `${path}.${field}`, message: 'must be greater than or equal to 0' });
+    }
+  }
+  if (!hasMin && !hasMax) {
+    errors.push({ path, message: 'needs a minimum or maximum distance' });
+  }
+  if (hasMin && hasMax && isFiniteNumber(condition.min) && isFiniteNumber(condition.max) &&
+      condition.min > condition.max) {
+    errors.push({ path, message: 'min must be less than or equal to max' });
   }
 }
 

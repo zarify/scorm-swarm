@@ -6,6 +6,9 @@ A browser-based activity builder and SCORM 1.2 learning package for activities u
 
 - Lets activity authors configure an activity and its swarm simulator scene in a browser-based builder.
 - Supports hints and checks that evaluate learner progress as they use the simulator.
+- Tests can script node movement and compare node positions: a check can move an environment node and assert the live distance between two nodes.
+- Authors can show the selected node's live X/Y canvas position to learners as an opt-in student panel.
+- Tests and hints can be reordered by drag or keyboard, and long editor sections collapse so a test's identity, trigger, flow, and feedback stay readable.
 - Saves learner progress so an activity can be resumed later.
 - Exports an activity as a SCORM package for uploading to a learning management system, or as activity JSON for reuse.
 

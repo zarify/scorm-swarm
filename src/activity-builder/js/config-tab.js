@@ -20,6 +20,7 @@ const PANEL_VISIBILITY = {
   'panel-radio-inspector': 'radio_inspector',
   'panel-runtime-log': 'runtime_log',
   'panel-env-values': 'environment_values',
+  'panel-node-coordinates': 'node_coordinates',
   'panel-header': 'panel_header',
 };
 

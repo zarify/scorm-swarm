@@ -2,7 +2,9 @@ import { evaluateCondition } from './effect-evaluator.js';
 import { bytesToBase64 } from './swarm-bundle.js';
 
 const CHECK_POLL_MS = 200;
-const DEFAULT_CHECK_TIMEOUT_SECONDS = 5;
+const DEFAULT_CHECK_TIMEOUT_MS = 5000;
+const INSTANT_SAMPLE_TIMEOUT_MS = 250;
+const ACTION_TIMEOUT_MS = 5000;
 
 const textEncoder = new TextEncoder();
 
@@ -23,6 +25,7 @@ export function createTestRunner({
 
   let cancelled = false;
   let displayWarningEmitted = false;
+  let activeRun = null;
 
   function cancelledResult(testCase) {
     return {
@@ -34,22 +37,21 @@ export function createTestRunner({
     };
   }
 
-  function timeoutSecondsOf(step) {
-    return Number.isFinite(step?.timeout_seconds)
-      ? step.timeout_seconds
-      : DEFAULT_CHECK_TIMEOUT_SECONDS;
+  function isStale(run) {
+    return cancelled || run !== activeRun;
   }
 
   function encodeUtf8Base64(text) {
     return bytesToBase64(textEncoder.encode(String(text ?? '')));
   }
 
-  async function executeAction(action) {
+  async function executeAction(action, run) {
     if (!action || typeof action !== 'object') return;
     const count = Number.isFinite(action.count) ? Math.max(1, Math.trunc(action.count)) : 1;
     const intervalMs = Number.isFinite(action.interval_ms) ? Math.max(0, action.interval_ms) : 0;
+    const options = { timeoutMs: ACTION_TIMEOUT_MS, signal: run.signal };
     for (let fire = 0; fire < count; fire += 1) {
-      if (cancelled) return;
+      if (isStale(run)) return;
       switch (action.type) {
         case 'radio_broadcast':
           await bridge.radioBroadcast({
@@ -57,19 +59,26 @@ export function createTestRunner({
             payload_b64: encodeUtf8Base64(action.payload ?? ''),
             channel: action.channel ?? null,
             group: action.group ?? null,
-          });
+          }, options);
           break;
         case 'press_button':
           await bridge.pressButton({
             device_id: action.device_id ?? null,
             button: action.button ?? 'A',
-          });
+          }, options);
           break;
         case 'set_node_level':
           await bridge.setNodeLevel({
             node_id: action.node_id ?? null,
             value: action.value ?? 0,
-          });
+          }, options);
+          break;
+        case 'move_node':
+          await bridge.moveNode({
+            node_id: action.node_id ?? null,
+            x: action.x,
+            y: action.y,
+          }, options);
           break;
         case 'add_node':
           await bridge.addNode({
@@ -78,31 +87,46 @@ export function createTestRunner({
             y: action.y,
             level: action.level ?? null,
             duration_seconds: action.duration_seconds ?? 10,
-          });
+          }, options);
           break;
         default:
           break;
       }
-      if (fire < count - 1 && intervalMs > 0 && !cancelled) await sleepFn(intervalMs);
+      if (fire < count - 1 && intervalMs > 0 && !isStale(run)) await sleepFn(intervalMs);
     }
   }
 
-  async function pollDisplays() {
+  function warnDisplayPollingFailure() {
+    if (displayWarningEmitted) return;
+    displayWarningEmitted = true;
+    onEvent({ kind: 'runner-warning', message: 'Display polling failed; treating displays as empty.' });
+  }
+
+  async function readDisplays(options) {
     try {
-      const displays = await bridge.getDisplay();
+      const displays = await bridge.getDisplay(options);
       return displays && typeof displays === 'object' ? displays : {};
     } catch {
-      if (!displayWarningEmitted) {
-        displayWarningEmitted = true;
-        onEvent({ kind: 'runner-warning', message: 'Display polling failed; treating displays as empty.' });
-      }
-      return {};
+      if (!options.signal?.aborted) warnDisplayPollingFailure();
+      return undefined;
+    }
+  }
+
+  async function readNodePositions(nodeRefs, options) {
+    if (nodeRefs.length === 0) return undefined;
+    try {
+      const positions = await bridge.getNodePositions(nodeRefs, options);
+      return toPositionMaps(positions);
+    } catch {
+      return undefined;
     }
   }
 
   function appendDisplayEvents(feed, displays, previous) {
+    const updated = {};
     for (const [deviceId, pixels] of Object.entries(displays)) {
       if (!Array.isArray(pixels)) continue;
+      updated[deviceId] = [...pixels];
       if (previous) {
         const before = previous[deviceId];
         if (before && framesEqual(before, pixels)) continue;
@@ -112,33 +136,106 @@ export function createTestRunner({
         event: { kind: 'display', device_id: deviceId, pixels: [...pixels] },
       });
     }
+    return updated;
   }
 
-  async function runCheckStep(step, feed, since) {
-    const timeoutSeconds = timeoutSecondsOf(step);
-    const timeoutMs = Math.max(0, timeoutSeconds * 1000);
+  function evaluateStep(step, feed, since, until, nowValue, nodePositions) {
+    return evaluateCondition(step?.condition, feed, nowValue, { since, until, nodePositions });
+  }
+
+  function missingNodeDetail(stepIndex, evaluation) {
+    const { kind, id } = evaluation.missingNode;
+    return `Step ${stepIndex + 1} cannot check distance: unknown ${kind} ${id}.`;
+  }
+
+  async function runCheckStep(step, feed, since, stepIndex, run) {
+    const timeoutMs = checkTimeoutMs(step);
     const startedAt = nowFn();
+    const deadline = startedAt + timeoutMs;
+    const needsDisplay = conditionNeedsDisplay(step?.condition);
+    const needsPositions = conditionNeedsPositions(step?.condition);
+    const nodeRefs = needsPositions ? collectNodeRefs(step.condition) : [];
+    const needsState = needsDisplay || needsPositions;
     let previousDisplays = null;
+    let nodePositions;
+
+    if (timeoutMs === 0) {
+      // One evaluation. A state sample gets its own bounded transport ceiling,
+      // and evidence is still limited to what existed when the step started.
+      if (needsState) {
+        const options = { timeoutMs: INSTANT_SAMPLE_TIMEOUT_MS, signal: run.signal };
+        const [sampledDisplays, sampledPositions] = await Promise.all([
+          needsDisplay ? readDisplays(options) : undefined,
+          needsPositions ? readNodePositions(nodeRefs, options) : undefined,
+        ]);
+        if (isStale(run)) return { cancelled: true };
+        nodePositions = sampledPositions;
+        if (sampledDisplays) {
+          previousDisplays = appendDisplayEvents(feed, sampledDisplays, previousDisplays);
+          backdateDisplayEvents(feed, previousDisplays, startedAt);
+        }
+      }
+      const evaluation = evaluateStep(step, feed, since, startedAt, startedAt, nodePositions);
+      if (evaluation.missingNode && nodePositions) {
+        return { passed: false, detail: missingNodeDetail(stepIndex, evaluation) };
+      }
+      return { passed: evaluation.passed };
+    }
+
+    const pollCeiling = needsState
+      ? Math.min(CHECK_POLL_MS, Math.max(1, Math.floor(timeoutMs / 4)))
+      : CHECK_POLL_MS;
 
     while (true) {
-      if (cancelled) return { cancelled: true };
-      const displays = await pollDisplays();
-      appendDisplayEvents(feed, displays, previousDisplays);
-      previousDisplays = Object.fromEntries(
-        Object.entries(displays)
-          .filter(([, pixels]) => Array.isArray(pixels))
-          .map(([deviceId, pixels]) => [deviceId, [...pixels]]),
+      if (isStale(run)) return { cancelled: true };
+      const remaining = deadline - nowFn();
+      if (remaining <= 0) break;
+      if (needsState) {
+        const options = { timeoutMs: remaining, signal: run.signal };
+        const [sampledDisplays, sampledPositions] = await Promise.all([
+          needsDisplay ? readDisplays(options) : undefined,
+          needsPositions ? readNodePositions(nodeRefs, options) : undefined,
+        ]);
+        if (isStale(run)) return { cancelled: true };
+        // A reply that lands after the deadline is not in-budget evidence.
+        const inBudget = nowFn() <= deadline;
+        if (inBudget && sampledDisplays) {
+          previousDisplays = appendDisplayEvents(feed, sampledDisplays, previousDisplays);
+        }
+        if (inBudget && sampledPositions) nodePositions = sampledPositions;
+      }
+      const evaluation = evaluateStep(
+        step,
+        feed,
+        since,
+        deadline,
+        Math.min(nowFn(), deadline),
+        nodePositions,
       );
-
-      const evaluation = evaluateCondition(step?.condition, feed, nowFn(), { since });
+      if (evaluation.missingNode && nodePositions) {
+        return { passed: false, detail: missingNodeDetail(stepIndex, evaluation) };
+      }
       if (evaluation.passed) return { passed: true };
-      if (cancelled) return { cancelled: true };
-      if (timeoutMs === 0 || nowFn() - startedAt >= timeoutMs) return { passed: false };
-      await sleepFn(CHECK_POLL_MS);
+      const budget = deadline - nowFn();
+      if (budget <= 0) break;
+      await sleepFn(Math.min(pollCeiling, budget));
     }
+    if (isStale(run)) return { cancelled: true };
+    const finalEvaluation = evaluateStep(
+      step,
+      feed,
+      since,
+      deadline,
+      Math.min(nowFn(), deadline),
+      nodePositions,
+    );
+    if (finalEvaluation.missingNode && nodePositions) {
+      return { passed: false, detail: missingNodeDetail(stepIndex, finalEvaluation) };
+    }
+    return { passed: finalEvaluation.passed };
   }
 
-  async function runTest(testCase, feed) {
+  async function runTest(testCase, feed, run) {
     const points = normalizePoints(testCase.points);
     const result = (passed, failedStepIndex, detail) => ({
       id: testCase.id,
@@ -151,28 +248,38 @@ export function createTestRunner({
     const trigger = Array.isArray(testCase.trigger) ? testCase.trigger : [];
 
     let since = nowFn();
-    for (const action of trigger) {
-      if (cancelled) return result(false, null, 'cancelled');
-      await executeAction(action);
+    for (let actionIndex = 0; actionIndex < trigger.length; actionIndex += 1) {
+      if (isStale(run)) return result(false, null, 'cancelled');
+      try {
+        await executeAction(trigger[actionIndex], run);
+      } catch (error) {
+        if (isStale(run)) return result(false, null, 'cancelled');
+        return result(false, null, `Trigger action ${actionIndex + 1} failed: ${errorMessage(error)}`);
+      }
     }
-    if (cancelled) return result(false, null, 'cancelled');
+    if (isStale(run)) return result(false, null, 'cancelled');
 
     for (let stepIndex = 0; stepIndex < steps.length; stepIndex += 1) {
       const step = steps[stepIndex];
-      if (cancelled) return result(false, null, 'cancelled');
+      if (isStale(run)) return result(false, null, 'cancelled');
       if (step?.type === 'action') {
         since = nowFn();
-        await executeAction(step.action);
-        if (cancelled) return result(false, null, 'cancelled');
+        try {
+          await executeAction(step.action, run);
+        } catch (error) {
+          if (isStale(run)) return result(false, null, 'cancelled');
+          return result(false, stepIndex, `Step ${stepIndex + 1} action failed: ${errorMessage(error)}`);
+        }
         continue;
       }
-      const outcome = await runCheckStep(step, feed, since);
+      const outcome = await runCheckStep(step, feed, since, stepIndex, run);
       if (outcome.cancelled) return result(false, null, 'cancelled');
       if (!outcome.passed) {
+        if (outcome.detail) return result(false, stepIndex, outcome.detail);
         return result(
           false,
           stepIndex,
-          `step ${stepIndex + 1} timed out after ${timeoutSecondsOf(step)}s`,
+          `Step ${stepIndex + 1} timed out after ${checkTimeoutMs(step)} ms.`,
         );
       }
       since = nowFn();
@@ -183,6 +290,9 @@ export function createTestRunner({
   async function runAll({ onProgress = () => {} } = {}) {
     cancelled = false;
     displayWarningEmitted = false;
+    const controller = new AbortController();
+    const run = { controller, signal: controller.signal };
+    activeRun = run;
     const feed = [];
     const results = [];
     let earnedPoints = 0;
@@ -202,27 +312,30 @@ export function createTestRunner({
     try {
       for (let index = 0; index < total; index += 1) {
         const testCase = testCases[index];
-        if (cancelled) {
+        if (isStale(run)) {
           onProgress({ id: testCase.id, index, total, status: 'cancelled' });
           continue;
         }
         onProgress({ id: testCase.id, index, total, status: 'running' });
-        const result = await runTest(testCase, feed);
-        if (cancelled || result.detail === 'cancelled') {
-          onProgress({ id: testCase.id, index, total, status: 'cancelled' });
+        const result = await runTest(testCase, feed, run);
+        if (isStale(run) || result.detail === 'cancelled') {
+          if (run === activeRun) onProgress({ id: testCase.id, index, total, status: 'cancelled' });
           continue;
         }
         results.push(result);
         if (result.passed) earnedPoints += result.points;
-        onProgress({
-          id: testCase.id,
-          index,
-          total,
-          status: result.passed ? 'passed' : 'failed',
-        });
+        if (run === activeRun) {
+          onProgress({
+            id: testCase.id,
+            index,
+            total,
+            status: result.passed ? 'passed' : 'failed',
+          });
+        }
       }
     } finally {
       if (unsubscribe) unsubscribe();
+      if (activeRun === run) activeRun = null;
     }
 
     if (cancelled) {
@@ -243,9 +356,74 @@ export function createTestRunner({
 
   function cancel() {
     cancelled = true;
+    activeRun?.controller.abort();
   }
 
   return { runAll, cancel };
+}
+
+function checkTimeoutMs(step) {
+  return Number.isFinite(step?.timeout_ms)
+    ? Math.max(0, step.timeout_ms)
+    : DEFAULT_CHECK_TIMEOUT_MS;
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function conditionNeedsDisplay(condition) {
+  if (!condition || typeof condition !== 'object') return false;
+  if (condition.type === 'led_display') return true;
+  return Array.isArray(condition.conditions) && condition.conditions.some(conditionNeedsDisplay);
+}
+
+function conditionNeedsPositions(condition) {
+  if (!condition || typeof condition !== 'object') return false;
+  if (condition.type === 'node_distance') return true;
+  return Array.isArray(condition.conditions) && condition.conditions.some(conditionNeedsPositions);
+}
+
+/** Collect each distinct (kind, id) endpoint once per check. */
+function collectNodeRefs(condition, refs = [], seen = new Set()) {
+  if (!condition || typeof condition !== 'object') return refs;
+  if (condition.type === 'node_distance') {
+    for (const ref of [condition.node_a, condition.node_b]) {
+      if (!ref || typeof ref !== 'object' || typeof ref.id !== 'string') continue;
+      const kind = ref.kind === 'device' ? 'device' : 'source';
+      const key = `${kind}\u0000${ref.id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      refs.push({ kind, id: ref.id });
+    }
+  }
+  if (Array.isArray(condition.conditions)) {
+    for (const child of condition.conditions) collectNodeRefs(child, refs, seen);
+  }
+  return refs;
+}
+
+function toPositionMaps(positions) {
+  const device = new Map();
+  const source = new Map();
+  for (const position of Array.isArray(positions) ? positions : []) {
+    if (!position || typeof position !== 'object') continue;
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) continue;
+    const target = position.kind === 'device' ? device : position.kind === 'source' ? source : null;
+    if (!target) continue;
+    target.set(position.id, { x: position.x, y: position.y });
+  }
+  return { device, source };
+}
+
+/** An instant check reads the state as it was when the step started. */
+function backdateDisplayEvents(feed, displays, startedAt) {
+  const deviceIds = new Set(Object.keys(displays ?? {}));
+  for (let index = feed.length - 1; index >= 0; index -= 1) {
+    const entry = feed[index];
+    if (entry.event?.kind !== 'display' || !deviceIds.has(entry.event.device_id)) continue;
+    if (entry.ts > startedAt) entry.ts = startedAt;
+  }
 }
 
 function normalizePoints(points) {

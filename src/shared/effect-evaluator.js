@@ -53,13 +53,21 @@ export function createGrader() {
   return { record, evaluate, reset };
 }
 
-export function evaluateCondition(condition, events, now = Date.now(), { since = -Infinity } = {}) {
+export function evaluateCondition(
+  condition,
+  events,
+  now = Date.now(),
+  { since = -Infinity, until = Infinity, nodePositions } = {},
+) {
   const eventLog = [];
   const latestSensors = new Map();
   const latestDisplays = new Map();
   for (const message of events ?? []) {
     const entry = normalizeEvent(message);
     if (!entry) continue;
+    // `until` bounds every kind of evidence; `since` only bounds event counts,
+    // so sensor and display state keep their pre-window history.
+    if (entry.ts > until) continue;
     eventLog.push(entry);
     if (entry.event.kind === 'sensor') {
       latestSensors.set(`${entry.event.device_id}\u0000${entry.event.sensor}`, {
@@ -77,32 +85,61 @@ export function evaluateCondition(condition, events, now = Date.now(), { since =
       });
     }
   }
-  return evaluateConditionState(condition, eventLog, latestSensors, latestDisplays, now, since);
+  return evaluateConditionState(
+    condition,
+    eventLog,
+    latestSensors,
+    latestDisplays,
+    now,
+    since,
+    nodePositions,
+  );
 }
 
-function evaluateConditionState(condition, eventLog, latestSensors, latestDisplays, now, since) {
+function evaluateConditionState(
+  condition,
+  eventLog,
+  latestSensors,
+  latestDisplays,
+  now,
+  since,
+  nodePositions,
+) {
   if (!condition || typeof condition !== 'object') return { passed: false, matchCount: 0 };
   if (condition.type === 'all' || condition.type === 'any' || condition.type === 'none') {
     const children = Array.isArray(condition.conditions) ? condition.conditions : [];
     const results = children.map((child) =>
-      evaluateConditionState(child, eventLog, latestSensors, latestDisplays, now, since),
+      evaluateConditionState(
+        child,
+        eventLog,
+        latestSensors,
+        latestDisplays,
+        now,
+        since,
+        nodePositions,
+      ),
     );
+    const missingNode = results.find((result) => result.missingNode)?.missingNode;
     if (condition.type === 'all') {
       const passed = results.length > 0 && results.every((result) => result.passed);
-      return { passed, matchCount: passed ? Math.min(...results.map((result) => result.matchCount)) : 0 };
+      return withMissingNode({ passed, matchCount: passed ? Math.min(...results.map((result) => result.matchCount)) : 0 }, missingNode);
     }
     if (condition.type === 'any') {
       const passing = results.filter((result) => result.passed);
-      return {
+      return withMissingNode({
         passed: passing.length > 0,
         matchCount: passing.reduce((total, result) => total + result.matchCount, 0),
-      };
+      }, missingNode);
     }
     const passed = results.every((result) => !result.passed);
-    return {
+    return withMissingNode({
       passed,
       matchCount: passed ? 0 : results.reduce((total, result) => total + result.matchCount, 0),
-    };
+    }, missingNode);
+  }
+
+  if (condition.type === 'node_distance') {
+    return evaluateNodeDistance(condition, nodePositions);
   }
 
   if (condition.type === 'sensor_reading') {
@@ -122,6 +159,38 @@ function evaluateConditionState(condition, eventLog, latestSensors, latestDispla
     passed: matchCount >= (condition.min_count ?? 1),
     matchCount,
   };
+}
+
+function withMissingNode(result, missingNode) {
+  return missingNode ? { ...result, missingNode } : result;
+}
+
+function evaluateNodeDistance(condition, nodePositions) {
+  const first = lookupNodePosition(nodePositions, condition.node_a);
+  const second = lookupNodePosition(nodePositions, condition.node_b);
+  const missing = missingNodeRef(condition.node_a, first) ?? missingNodeRef(condition.node_b, second);
+  if (missing) return { passed: false, matchCount: 0, missingNode: missing };
+  const distance = Math.hypot(first.x - second.x, first.y - second.y);
+  if (!Number.isFinite(distance)) return { passed: false, matchCount: 0 };
+  if (condition.min != null && distance < condition.min) return { passed: false, matchCount: 0 };
+  if (condition.max != null && distance > condition.max) return { passed: false, matchCount: 0 };
+  return { passed: true, matchCount: 1 };
+}
+
+function missingNodeRef(ref, position) {
+  if (!ref || typeof ref !== 'object') return undefined;
+  if (position) return undefined;
+  const kind = ref.kind === 'device' ? 'device' : 'source';
+  return { kind, id: String(ref.id ?? '') };
+}
+
+function lookupNodePosition(nodePositions, ref) {
+  if (!nodePositions || !ref || typeof ref !== 'object') return undefined;
+  const positions = ref.kind === 'device' ? nodePositions.device : nodePositions.source;
+  if (!(positions instanceof Map)) return undefined;
+  const position = positions.get(ref.id);
+  if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y)) return undefined;
+  return position;
 }
 
 function matchesEventCondition(condition, event) {

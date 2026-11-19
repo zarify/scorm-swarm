@@ -1,4 +1,4 @@
-import { VALID_CONDITION_TYPES } from '../../shared/config-validator.js';
+import { VALID_CHECK_ONLY_CONDITION_TYPES, VALID_CONDITION_TYPES } from '../../shared/config-validator.js';
 import { appendCheckbox, appendNumber, appendSelect, appendText, makeButton, makeField } from './form-fields.js';
 
 const CONDITION_LABELS = {
@@ -6,12 +6,18 @@ const CONDITION_LABELS = {
   any: 'Any condition',
   none: 'No child condition',
   serial_output: 'Serial output',
-  button_press: 'Button press',
+  button_press: 'Button press observed',
   radio_tx: 'Radio transmission',
   radio_rx: 'Radio reception',
   sensor_reading: 'Sensor reading',
   led_display: 'LED display',
+  node_distance: 'Distance between nodes',
 };
+
+const BUTTON_PRESS_HELP =
+  'Matches a learner or test pressing a simulator button; to check the program\u2019s response, add a separate output check.';
+
+const NODE_ENDPOINT_KINDS = { device: 'device', source: 'source' };
 
 const SENSOR_LABELS = {
   lightLevel: 'Light level',
@@ -46,6 +52,8 @@ export function createDefaultCondition(type = 'serial_output') {
       return { type, device_id: null, sensor: 'lightLevel', min: null, max: null, min_duration_seconds: 0 };
     case 'led_display':
       return { type, device_id: null, layout: '.....\n.....\n.....\n.....\n.....' };
+    case 'node_distance':
+      return { type, node_a: null, node_b: null, min: null, max: 100 };
     case 'serial_output':
     default:
       return {
@@ -66,6 +74,7 @@ export function renderConditionEditor({
   scene,
   depth = 0,
   onRemove,
+  allowNodeDistance = false,
 }) {
   if (!container) return;
   const current = condition && typeof condition === 'object'
@@ -73,7 +82,15 @@ export function renderConditionEditor({
     : createDefaultCondition();
   const updateCondition = (nextCondition) => {
     onChange(nextCondition);
-    renderConditionEditor({ container, condition: nextCondition, onChange, scene, depth, onRemove });
+    renderConditionEditor({
+      container,
+      condition: nextCondition,
+      onChange,
+      scene,
+      depth,
+      onRemove,
+      allowNodeDistance,
+    });
   };
   container.replaceChildren();
 
@@ -103,9 +120,9 @@ export function renderConditionEditor({
 
   const body = document.createElement('div');
   body.className = 'condition-node-body';
-  body.append(renderTypeSelector(current, updateCondition));
+  body.append(renderTypeSelector(current, updateCondition, allowNodeDistance));
   if (composite) {
-    body.append(renderComposite(current, updateCondition, scene, depth));
+    body.append(renderComposite(current, updateCondition, scene, depth, allowNodeDistance));
   } else {
     body.append(renderLeafFields(current, updateCondition, scene));
   }
@@ -113,14 +130,17 @@ export function renderConditionEditor({
   container.append(wrapper);
 }
 
-function renderTypeSelector(condition, onChange) {
+function renderTypeSelector(condition, onChange, allowNodeDistance) {
   const row = document.createElement('div');
   row.className = 'condition-type-row';
   const label = document.createElement('label');
   label.textContent = 'Condition type';
   const select = document.createElement('select');
   select.setAttribute('aria-label', 'Condition type');
-  for (const type of VALID_CONDITION_TYPES) {
+  const types = allowNodeDistance
+    ? VALID_CONDITION_TYPES
+    : VALID_CONDITION_TYPES.filter((type) => !VALID_CHECK_ONLY_CONDITION_TYPES.includes(type));
+  for (const type of types) {
     const option = document.createElement('option');
     option.value = type;
     option.textContent = CONDITION_LABELS[type] ?? type;
@@ -139,7 +159,7 @@ function renderTypeSelector(condition, onChange) {
   return row;
 }
 
-function renderComposite(condition, onChange, scene, depth) {
+function renderComposite(condition, onChange, scene, depth, allowNodeDistance) {
   const fragment = document.createDocumentFragment();
   const help = document.createElement('p');
   help.className = 'field-help';
@@ -177,6 +197,7 @@ function renderComposite(condition, onChange, scene, depth) {
       condition: child,
       scene,
       depth: depth + 1,
+      allowNodeDistance,
       onChange: (nextChild) => {
         const next = [...children];
         next[index] = nextChild;
@@ -202,6 +223,10 @@ function renderComposite(condition, onChange, scene, depth) {
 function renderLeafFields(condition, onChange, scene) {
   const fields = document.createElement('div');
   fields.className = 'condition-fields';
+  if (condition.type === 'node_distance') {
+    renderNodeDistanceFields(fields, condition, onChange, scene);
+    return fields;
+  }
   appendDeviceSelect(fields, 'Device', condition.device_id, scene, (value) => update(condition, 'device_id', value, onChange));
 
   switch (condition.type) {
@@ -221,6 +246,7 @@ function renderLeafFields(condition, onChange, scene) {
       ], (value) => update(condition, 'button', value, onChange));
       appendNumber(fields, 'Minimum presses', condition.min_count ?? 1,
         (value) => update(condition, 'min_count', value, onChange), { integer: true, minimum: 1 });
+      appendHelp(fields, BUTTON_PRESS_HELP);
       break;
     case 'radio_tx':
       appendNumber(fields, 'Radio channel · any', condition.channel,
@@ -275,6 +301,67 @@ function renderLeafFields(condition, onChange, scene) {
   return fields;
 }
 
+function renderNodeDistanceFields(fields, condition, onChange, scene) {
+  appendNodeEndpointSelect(fields, 'First node', condition.node_a, scene,
+    (value) => update(condition, 'node_a', value, onChange));
+  appendNodeEndpointSelect(fields, 'Second node', condition.node_b, scene,
+    (value) => update(condition, 'node_b', value, onChange));
+  appendNumber(fields, 'Minimum distance (canvas units)', condition.min,
+    (value) => update(condition, 'min', value, onChange), { nullable: true, minimum: 0 });
+  appendNumber(fields, 'Maximum distance (canvas units)', condition.max,
+    (value) => update(condition, 'max', value, onChange), { nullable: true, minimum: 0 });
+}
+
+function appendNodeEndpointSelect(fields, label, selected, scene, onChange) {
+  const options = sceneNodeOptions(scene);
+  const encoded = selected && typeof selected === 'object'
+    ? JSON.stringify({ kind: selected.kind, id: selected.id })
+    : '';
+  // Endpoint identity is (kind, id), so a bundle may reuse an id across types.
+  if (encoded && !options.some(([value]) => value === encoded)) {
+    options.push([encoded, `${selected.id} · ${selected.kind} · missing from scene`]);
+  }
+  appendSelect(fields, label, encoded, [
+    ['', 'Select node'],
+    ...options,
+  ], (value) => onChange(decodeNodeEndpoint(value)));
+}
+
+function sceneNodeOptions(scene) {
+  const devices = Array.isArray(scene?.devices) ? scene.devices : [];
+  const sources = Array.isArray(scene?.environmentSources) ? scene.environmentSources : [];
+  return [
+    ...devices.map((device) => [encodeNodeEndpoint('device', device.id), `${device.name} · device · ${device.id}`]),
+    ...sources.map((source) => [encodeNodeEndpoint('source', source.id), `${source.name} · source · ${source.id}`]),
+  ];
+}
+
+function encodeNodeEndpoint(kind, id) {
+  return JSON.stringify({ kind, id });
+}
+
+/** Only known option values decode; anything else leaves no endpoint chosen. */
+function decodeNodeEndpoint(value) {
+  if (!value) return null;
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  if (!parsed || !NODE_ENDPOINT_KINDS[parsed.kind] || typeof parsed.id !== 'string' || parsed.id === '') {
+    return null;
+  }
+  return { kind: parsed.kind, id: parsed.id };
+}
+
+function appendHelp(fields, text) {
+  const help = document.createElement('p');
+  help.className = 'field-help';
+  help.textContent = text;
+  fields.append(help);
+}
+
 function appendPayloadFields(fields, payload, onChange) {
   const enabled = payload !== null && payload !== undefined;
   appendCheckbox(fields, 'Match packet payload', enabled, (checked) => {
@@ -305,7 +392,8 @@ function update(condition, key, value, onChange) {
 }
 
 
-function conditionSummary(condition) {
+export function conditionSummary(condition) {
+  if (!condition || typeof condition !== 'object') return '';
   if (['all', 'any', 'none'].includes(condition.type)) {
     return `${condition.conditions?.length ?? 0} sub-condition(s)`;
   }
@@ -313,5 +401,19 @@ function conditionSummary(condition) {
   if (condition.type === 'button_press') return condition.button ?? 'any button';
   if (condition.type === 'sensor_reading') return SENSOR_LABELS[condition.sensor] ?? 'Sensor';
   if (condition.type === 'led_display') return 'LED layout';
+  if (condition.type === 'node_distance') return nodeDistanceSummary(condition);
   return condition.type === 'radio_rx' ? 'Received packet' : 'Transmitted packet';
+}
+
+function nodeDistanceSummary(condition) {
+  const hasMin = Number.isFinite(condition.min);
+  const hasMax = Number.isFinite(condition.max);
+  if (hasMin && hasMax) {
+    return condition.min === condition.max
+      ? `${condition.min} units`
+      : `${condition.min}\u2013${condition.max} units`;
+  }
+  if (hasMax) return `\u2264 ${condition.max} units`;
+  if (hasMin) return `\u2265 ${condition.min} units`;
+  return 'No distance range';
 }

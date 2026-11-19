@@ -6,6 +6,7 @@ const ACTION_LABELS = {
   press_button: 'Press button',
   set_node_level: 'Set node level',
   add_node: 'Add node',
+  move_node: 'Move node',
 };
 
 const BUTTON_LABELS = { A: 'A', B: 'B', AB: 'A+B' };
@@ -25,6 +26,8 @@ export function createDefaultAction(type = 'press_button') {
       return { type, device_id: null, channel: null, group: null, payload: '', count: 1, interval_ms: 0 };
     case 'set_node_level':
       return { type, node_id: null, value: 0 };
+    case 'move_node':
+      return { type, node_id: null, x: 0, y: 0 };
     case 'add_node':
       return { type, node_type: 'light', x: 0, y: 0, level: null, duration_seconds: 10 };
     case 'press_button':
@@ -38,11 +41,24 @@ export function actionSummary(action) {
   if (action.type === 'radio_broadcast') return action.payload ? `Radio "${action.payload}"` : 'Radio broadcast';
   if (action.type === 'press_button') return `Button ${BUTTON_LABELS[action.button] ?? action.button ?? 'A'}`;
   if (action.type === 'set_node_level') return `Level ${action.value ?? 0}`;
+  if (action.type === 'move_node') {
+    return `Move to (${formatCoordinate(action.x)}, ${formatCoordinate(action.y)})`;
+  }
   if (action.type === 'add_node') return `Add ${action.node_type ?? 'light'} node`;
   return 'Action';
 }
 
-export function renderActionEditor({ container, action, scene, onChange, onRemove }) {
+/** Exported so the editor rows and step cards can describe an action without duplicating rules. */
+export function actionTitle(action) {
+  if (!action || typeof action !== 'object') return 'Action';
+  return ACTION_LABELS[action.type] ?? 'Action';
+}
+
+function formatCoordinate(value) {
+  return Number.isFinite(value) ? String(value) : '—';
+}
+
+export function renderActionEditor({ container, action, scene, onChange }) {
   if (!container) return;
   const current = action && typeof action === 'object' ? action : createDefaultAction();
   const update = (key, value) => onChange({ ...current, [key]: value });
@@ -50,26 +66,6 @@ export function renderActionEditor({ container, action, scene, onChange, onRemov
 
   const card = document.createElement('article');
   card.className = 'action-card';
-
-  const header = document.createElement('div');
-  header.className = 'action-card-header';
-  const title = document.createElement('strong');
-  title.className = 'action-card-title';
-  title.textContent = ACTION_LABELS[current.type] ?? 'Action';
-  const summary = document.createElement('span');
-  summary.className = 'action-card-summary';
-  summary.textContent = actionSummary(current);
-  header.append(title, summary);
-  if (onRemove) {
-    const remove = document.createElement('button');
-    remove.type = 'button';
-    remove.className = 'condition-remove';
-    remove.textContent = 'Remove';
-    remove.setAttribute('aria-label', `Remove ${ACTION_LABELS[current.type] ?? 'action'}`);
-    remove.addEventListener('click', onRemove);
-    header.append(remove);
-  }
-  card.append(header);
 
   const typeRow = document.createElement('div');
   typeRow.className = 'action-type-row';
@@ -118,6 +114,20 @@ export function renderActionEditor({ container, action, scene, onChange, onRemov
       appendNumber(fields, LEVEL_LABELS[sceneNodes(scene).find((node) => node.id === current.node_id)?.type] ?? 'Level',
         current.value, (value) => update('value', value));
       break;
+    case 'move_node': {
+      appendNodeField(fields, current.node_id, scene, (value) => {
+        const node = sceneNodes(scene).find((candidate) => candidate.id === value);
+        const position = node?.position;
+        onChange({
+          ...current,
+          node_id: value,
+          ...(value && position ? { x: position.x, y: position.y } : {}),
+        });
+      });
+      appendNumber(fields, 'X', current.x, (value) => update('x', value));
+      appendNumber(fields, 'Y', current.y, (value) => update('y', value));
+      break;
+    }
     case 'add_node': {
       appendSelect(fields, 'Node type', current.node_type ?? 'light',
         VALID_NODE_TYPES.map((type) => [type, NODE_TYPE_LABELS[type] ?? type]),
@@ -157,9 +167,15 @@ function appendDeviceField(fields, selected, scene, onChange) {
 
 function appendNodeField(fields, selected, scene, onChange) {
   const nodes = sceneNodes(scene);
+  const options = nodes.map((node) => [node.id, `${node.name} · ${node.type}`]);
+  // A saved id that the captured scene no longer has stays visible instead of
+  // silently selecting a different node.
+  if (selected && !nodes.some((node) => node.id === selected)) {
+    options.push([selected, `${selected} · missing from scene`]);
+  }
   appendSelect(fields, 'Node', selected ?? '', [
     ['', 'Select node'],
-    ...nodes.map((node) => [node.id, `${node.name} · ${node.type}`]),
+    ...options,
   ], (value) => onChange(value === '' ? null : value));
 }
 

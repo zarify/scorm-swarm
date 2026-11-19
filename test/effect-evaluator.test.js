@@ -122,6 +122,58 @@ test('composites use all/any and none means no child condition is satisfied', ()
   assert.equal(evaluateCondition({ type: 'all', conditions: none.conditions }, events).passed, false);
 });
 
+test('an until window excludes later events from counts, sensors, and displays', () => {
+  const events = [
+    envelope(1, 1000, { kind: 'serial', device_id: 'alice', text: 'tick' }),
+    envelope(2, 1126, { kind: 'serial', device_id: 'alice', text: 'tick' }),
+    envelope(3, 1126, { kind: 'sensor', device_id: 'alice', sensor: 'lightLevel', value: 5 }),
+    envelope(4, 1126, { kind: 'display', device_id: 'alice', pixels: HAPPY_FRAME }),
+  ];
+  const serial = { type: 'serial_output', device_id: 'alice', match: 'contains', value: 'tick', min_count: 2 };
+  assert.equal(evaluateCondition(serial, events, 1200, { until: 1125 }).passed, false);
+  assert.equal(evaluateCondition(serial, events, 1200, { until: 1126 }).passed, true);
+
+  // A sensor value that only arrived after the deadline is not evidence.
+  const wide = { type: 'sensor_reading', device_id: 'alice', sensor: 'lightLevel', min: 1 };
+  assert.equal(evaluateCondition(wide, events, 1200, { until: 1100 }).passed, false);
+  const display = { type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT };
+  assert.equal(evaluateCondition(display, events, 1200, { until: 1100 }).passed, false);
+});
+
+test('node distance compares live positions against inclusive bounds', () => {
+  const nodePositions = {
+    device: new Map([['alice', { x: 10, y: 20 }]]),
+    source: new Map([['lamp', { x: 13, y: 24 }]]),
+  };
+  const condition = {
+    type: 'node_distance',
+    node_a: { kind: 'device', id: 'alice' },
+    node_b: { kind: 'source', id: 'lamp' },
+    min: 5,
+    max: 5,
+  };
+  assert.equal(evaluateCondition(condition, [], 1200, { nodePositions }).passed, true);
+  assert.equal(evaluateCondition({ ...condition, max: 4.999 }, [], 1200, { nodePositions }).passed, false);
+  assert.equal(evaluateCondition({ ...condition, min: 5.001 }, [], 1200, { nodePositions }).passed, false);
+  assert.equal(evaluateCondition({ ...condition, min: null }, [], 1200, { nodePositions }).passed, true);
+
+  const missing = evaluateCondition(
+    { ...condition, node_b: { kind: 'source', id: 'ghost' } },
+    [],
+    1200,
+    { nodePositions },
+  );
+  assert.equal(missing.passed, false);
+  assert.deepEqual(missing.missingNode, { kind: 'source', id: 'ghost' });
+
+  // Composites propagate the missing endpoint instead of silently passing.
+  const none = evaluateCondition({
+    type: 'none',
+    conditions: [{ ...condition, node_b: { kind: 'device', id: 'ghost' } }],
+  }, [], 1200, { nodePositions });
+  assert.deepEqual(none.missingNode, { kind: 'device', id: 'ghost' });
+});
+
 test('min_count reports evidence count and code-load/reset clear the grader state', () => {
   const grader = createGrader();
   const condition = { type: 'serial_output', device_id: null, match: 'contains', value: 'tick', min_count: 3 };

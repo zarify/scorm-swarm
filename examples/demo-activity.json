@@ -34,7 +34,7 @@
               "case_sensitive": true,
               "min_count": 1
             },
-            "timeout_seconds": 5
+            "timeout_ms": 5000
           }
         ]
       },
@@ -54,7 +54,7 @@
               "device_id": "alice",
               "layout": ".....\n.#.#.\n.....\n#...#\n.###."
             },
-            "timeout_seconds": 5
+            "timeout_ms": 5000
           }
         ]
       },
@@ -80,7 +80,7 @@
               "rssi_max": null,
               "min_count": 1
             },
-            "timeout_seconds": 8
+            "timeout_ms": 8000
           }
         ]
       }

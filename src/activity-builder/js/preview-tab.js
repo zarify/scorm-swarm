@@ -11,109 +11,247 @@ import {
 import { connectSimBridge } from '../../shared/sim-bridge.js';
 import { getConfig, getSceneBundle, onConfigChange, onSceneChange, showToast } from './app.js';
 
+const LEARNER_URL = 'sim/index.html?mode=learner';
+const READY_TIMEOUT_MS = 10_000;
+const LOAD_TIMEOUT_MS = 10_000;
+const CHECK_LABEL = 'Check';
+const RUNNING_LABEL = 'Running…';
+
 let bridge;
 let bridgeReady = false;
-let grader;
+let connecting = false;
+/** Incremented on every connect attempt; stale attempts compare against it and bail out. */
+let connectToken = 0;
 let runner;
+/** Incremented whenever the active runner is replaced or detached; stale runs compare against it. */
+let runnerToken = 0;
 let checkInProgress = false;
 let runProgress = new Map();
 const seenSimulatorPayloads = new WeakSet();
-let hintState;
+let grader = createGrader();
+let hintState = createHintState();
 let latestHintResult = { visibleHints: [], nextEvaluationDelayMs: null };
 let eventLog = [];
 let hintTimer;
 const hintDebouncer = createHintEventDebouncer(evaluateHintEvent, 250);
 
 export function initPreviewTab() {
-  grader = createGrader();
-  hintState = createHintState();
-  const iframe = document.getElementById('preview-iframe');
-  void connectPreview(iframe);
+  void connectPreview();
   document.getElementById('btn-reset-session').addEventListener('click', () => void resetSession());
   document.getElementById('btn-check-session').addEventListener('click', () => void checkSession());
   onConfigChange((config) => {
-    runner?.cancel();
-    grader = createGrader();
-    hintState = createHintState();
-    eventLog = [];
-    runProgress = new Map();
-    hintDebouncer.cancel();
-    clearTimeout(hintTimer);
-    hintTimer = undefined;
-    renderEventLog();
-    renderGrades(null);
-    evaluateHintEvent({ type: 'timer' });
-    if (bridgeReady) {
-      void bridge.setCapabilities(config.capabilities);
-      void bridge.setUiVisibility(config.panel_visibility);
+    invalidateRun();
+    resetPreviewState();
+    if (bridgeReady && bridge) {
+      const activeBridge = bridge;
+      // A scene change can close this bridge in the same turn; a superseded
+      // settings send must not surface as an unhandled rejection.
+      void applySettings(activeBridge, config).catch(() => {});
       rebuildRunner();
     }
   });
-  onSceneChange((bundle) => {
-    runner?.cancel();
-    grader.reset();
-    hintState = createHintState();
-    eventLog = [];
-    runProgress = new Map();
-    hintDebouncer.cancel();
-    clearTimeout(hintTimer);
-    hintTimer = undefined;
-    renderEventLog();
-    renderGrades(null);
-    evaluateHintEvent({ type: 'timer' });
-    if (bridgeReady) {
-      rebuildRunner();
-      if (bundle) {
-        void bridge.loadBundle(bundle).catch((error) =>
-          showToast(`Could not load preview scene: ${error.message}`, 'error'),
-        );
-      }
-    }
+  onSceneChange(() => {
+    void connectPreview({ reset: true });
   });
   renderEventLog();
   renderGrades(null);
   renderHints();
 }
 
-async function connectPreview(iframe) {
-  bridge?.close();
+/**
+ * The one connect path: used by initialisation, scene changes and Reset session.
+ * A reset always invalidates the old runner/bridge and mounts a brand-new browsing
+ * context before the learner simulator is loaded into it.
+ */
+async function connectPreview({ reset = false } = {}) {
+  const generation = ++connectToken;
+  connecting = true;
+  // Cancel and detach the old run *synchronously*; its completion can no longer touch the UI.
+  invalidateRun();
+  resetPreviewState();
+  const previousBridge = bridge;
+  bridge = undefined;
   bridgeReady = false;
+  previousBridge?.close();
+  updateControls();
   setPreviewStatus('Waiting for learner simulator…');
-  if (!iframe.contentWindow) {
+
+  const frame = document.getElementById('preview-iframe');
+  if (!frame) {
+    connecting = false;
+    updateControls();
     setPreviewStatus('Learner simulator frame is unavailable.', 'error');
     return;
   }
-  const learnerUrl = 'sim/index.html?mode=learner';
-  const targetOrigin = new URL(learnerUrl, window.location.href).origin;
-  bridge = connectSimBridge(iframe.contentWindow, targetOrigin);
-  const connectingBridge = bridge;
-  bridge.onEvent(handleSimulatorEvent);
-  iframe.src = learnerUrl;
 
-  try {
-    const ready = await connectingBridge.ready;
-    if (!ready || connectingBridge !== bridge) return;
-    bridgeReady = true;
-    await connectingBridge.setCapabilities(getConfig().capabilities);
-    await connectingBridge.setUiVisibility(getConfig().panel_visibility);
-    const bundle = getSceneBundle();
-    if (bundle) await connectingBridge.loadBundle(bundle);
+  // A fresh browsing context: an old frame cannot acknowledge or send evidence into the new run.
+  const freshFrame = frame.cloneNode(false);
+  freshFrame.id = frame.id;
+  freshFrame.src = 'about:blank';
+  frame.replaceWith(freshFrame);
+
+  const targetOrigin = new URL(LEARNER_URL, window.location.href).origin;
+  const frameWindow = freshFrame.contentWindow;
+  if (!frameWindow) {
+    connecting = false;
+    updateControls();
+    setPreviewStatus('Learner simulator frame is unavailable.', 'error');
+    return;
+  }
+
+  const bundle = getSceneBundle();
+  const activeBridge = connectSimBridge(frameWindow, targetOrigin);
+  bridge = activeBridge;
+  activeBridge.onEvent((payload) => handleSimulatorEvent(payload, activeBridge));
+  // Connect the bridge before navigating the new frame to the simulator.
+  freshFrame.src = LEARNER_URL;
+
+  const isStale = () => generation !== connectToken || activeBridge !== bridge;
+
+  const ready = await waitForReady(activeBridge, READY_TIMEOUT_MS);
+  if (isStale()) return;
+  if (!ready) {
+    activeBridge.close();
+    bridge = undefined;
+    bridgeReady = false;
+    connecting = false;
     rebuildRunner();
-    setPreviewStatus('Learner simulator connected.');
+    updateControls();
+    setPreviewStatus(
+      reset
+        ? 'Could not reset preview: learner simulator did not answer within 10 seconds.'
+        : 'Learner simulator did not connect within 10 seconds.',
+      'error',
+    );
+    return;
+  }
+
+  bridgeReady = true;
+  try {
+    await applyPreviewSettings(activeBridge);
+    if (isStale()) return;
+    if (bundle) await activeBridge.loadBundle(bundle, { timeoutMs: LOAD_TIMEOUT_MS });
+    if (isStale()) return;
+    // Config edits that arrived while connecting: re-read and apply the latest settings.
+    await applyPreviewSettings(activeBridge);
+    if (isStale()) return;
+    connecting = false;
+    rebuildRunner();
+    updateControls();
+    if (reset) {
+      setPreviewStatus(
+        bundle
+          ? 'Preview reset to the starting scene.'
+          : 'Preview reset to the built-in demo (no captured scene).',
+      );
+    } else {
+      setPreviewStatus(
+        bundle
+          ? 'Learner simulator connected.'
+          : 'Showing the built-in demo. Capture a scene to preview your activity.',
+      );
+    }
   } catch (error) {
-    setPreviewStatus(error instanceof Error ? error.message : 'Learner simulator failed to connect.', 'error');
+    if (isStale()) return;
+    activeBridge.close();
+    bridge = undefined;
+    bridgeReady = false;
+    connecting = false;
+    rebuildRunner();
+    updateControls();
+    const reason = error instanceof Error ? error.message : String(error);
+    setPreviewStatus(
+      reset ? `Could not reset preview: ${reason}` : `Could not connect to the learner simulator: ${reason}`,
+      'error',
+    );
   }
 }
 
-
-function rebuildRunner() {
-  runner?.cancel();
-  runner = bridgeReady
-    ? createTestRunner({ testCases: getConfig().evaluation.test_cases, bridge, onEvent: handleSimulatorEvent })
-    : undefined;
+function previewUiVisibility(config) {
+  // Preview always shows author coordinates; the exported package keeps the authored toggle.
+  return { ...config.panel_visibility, node_coordinates: true };
 }
 
-function handleSimulatorEvent(payload) {
+async function applyPreviewSettings(bridgeRef) {
+  await applySettings(bridgeRef, getConfig());
+}
+
+async function applySettings(bridgeRef, config) {
+  await bridgeRef.setCapabilities(config.capabilities);
+  await bridgeRef.setUiVisibility(previewUiVisibility(config));
+}
+
+function waitForReady(bridgeRef, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    bridgeRef.ready.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value === true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(false);
+      },
+    );
+  });
+}
+
+function resetPreviewState() {
+  grader.reset();
+  hintState = createHintState();
+  latestHintResult = { visibleHints: [], nextEvaluationDelayMs: null };
+  eventLog = [];
+  runProgress = new Map();
+  hintDebouncer.cancel();
+  clearTimeout(hintTimer);
+  hintTimer = undefined;
+  renderEventLog();
+  renderGrades(null);
+  evaluateHintEvent({ type: 'timer' });
+}
+
+/** Cancel and detach the active run so a superseded run cannot write UI or re-enable controls. */
+function invalidateRun() {
+  runnerToken += 1;
+  const previousRunner = runner;
+  runner = undefined;
+  if (previousRunner) previousRunner.cancel();
+  runProgress = new Map();
+  checkInProgress = false;
+  updateControls();
+}
+
+function updateControls() {
+  const resetButton = document.getElementById('btn-reset-session');
+  if (resetButton) resetButton.disabled = connecting;
+  const checkButton = document.getElementById('btn-check-session');
+  if (!checkButton) return;
+  checkButton.textContent = checkInProgress ? RUNNING_LABEL : CHECK_LABEL;
+  checkButton.disabled = checkInProgress || connecting || !bridgeReady || !runner;
+}
+
+function rebuildRunner() {
+  const previousRunner = runner;
+  runnerToken += 1;
+  runner = undefined;
+  if (previousRunner) previousRunner.cancel();
+  if (bridgeReady && bridge) {
+    const activeBridge = bridge;
+    runner = createTestRunner({
+      testCases: getConfig().evaluation.test_cases,
+      bridge: activeBridge,
+      onEvent: (payload) => {
+        if (activeBridge !== bridge) return;
+        handleSimulatorEvent(payload, activeBridge);
+      },
+    });
+  }
+  updateControls();
+}
+
+function handleSimulatorEvent(payload, sourceBridge = bridge) {
+  if (sourceBridge !== bridge) return;
   if (!payload || typeof payload !== 'object') return;
   if (payload.event && typeof payload.event === 'object') {
     if (seenSimulatorPayloads.has(payload)) return;
@@ -135,17 +273,23 @@ function handleSimulatorEvent(payload) {
   renderEventLog();
   hintDebouncer.push({ type: 'sim_event', payload });
 }
+
 async function checkSession() {
-  if (!runner || checkInProgress) return;
+  if (!runner || !bridgeReady || connecting || checkInProgress) return;
+  const activeRunner = runner;
+  const runToken = runnerToken;
   checkInProgress = true;
-  const button = document.getElementById('btn-check-session');
-  const previousLabel = button.textContent;
-  button.disabled = true;
-  button.textContent = 'Running…';
   runProgress = new Map();
+  updateControls();
   recordCheckAttempt(hintState);
   try {
-    const outcome = await runner.runAll({ onProgress: renderRunProgress });
+    const outcome = await activeRunner.runAll({
+      onProgress: (progress) => {
+        if (activeRunner !== runner || runToken !== runnerToken) return;
+        renderRunProgress(progress);
+      },
+    });
+    if (activeRunner !== runner || runToken !== runnerToken) return;
     if (!Object.prototype.hasOwnProperty.call(outcome, 'score')) {
       runProgress.clear();
       renderGrades(null);
@@ -157,11 +301,13 @@ async function checkSession() {
       failedCheckCount: outcome.results.filter((result) => !result.passed).length,
     });
   } catch (error) {
+    if (activeRunner !== runner || runToken !== runnerToken) return;
     showToast(`Test run failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
   } finally {
-    checkInProgress = false;
-    button.disabled = false;
-    button.textContent = previousLabel;
+    if (activeRunner === runner && runToken === runnerToken) {
+      checkInProgress = false;
+      updateControls();
+    }
   }
 }
 
@@ -171,24 +317,8 @@ function renderRunProgress(progress) {
 }
 
 async function resetSession() {
-  runner?.cancel();
-  grader.reset();
-  hintState = createHintState();
-  eventLog = [];
-  runProgress.clear();
-  hintDebouncer.cancel();
-  clearTimeout(hintTimer);
-  hintTimer = undefined;
-  renderEventLog();
-  renderGrades(null);
-  evaluateHintEvent({ type: 'timer' });
-  if (bridgeReady) {
-    try {
-      await bridge.reset();
-    } catch (error) {
-      showToast(`Could not reset simulator: ${error.message}`, 'error');
-    }
-  }
+  if (connecting) return;
+  await connectPreview({ reset: true });
 }
 
 function evaluateHintEvent(event) {
@@ -321,8 +451,18 @@ function formatEvent(payload) {
 
 function setPreviewStatus(message, status = 'ready') {
   const statusElement = document.getElementById('preview-status');
-  statusElement.lastChild.textContent = message;
+  if (statusElement) {
+    let text = document.getElementById('preview-status-text');
+    if (!text) {
+      text = document.createElement('span');
+      text.id = 'preview-status-text';
+      statusElement.append(text);
+    }
+    text.textContent = message;
+  }
   const dot = document.getElementById('preview-status-dot');
-  dot.classList.toggle('is-ready', status === 'ready');
-  dot.classList.toggle('is-error', status === 'error');
+  if (dot) {
+    dot.classList.toggle('is-ready', status === 'ready');
+    dot.classList.toggle('is-error', status === 'error');
+  }
 }

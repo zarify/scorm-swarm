@@ -37,6 +37,7 @@
         "radio_inspector": { "type": "boolean", "default": true },
         "runtime_log": { "type": "boolean", "default": false },
         "environment_values": { "type": "boolean", "default": true },
+        "node_coordinates": { "type": "boolean", "default": false },
         "panel_header": { "type": "boolean", "default": false }
       }
     },
@@ -83,6 +84,31 @@
         { "$ref": "#/$defs/sensorReading" },
         { "$ref": "#/$defs/ledDisplay" }
       ]
+    },
+    "checkCondition": {
+      "oneOf": [
+        { "$ref": "#/$defs/checkComposite" },
+        { "$ref": "#/$defs/serialOutput" },
+        { "$ref": "#/$defs/buttonPress" },
+        { "$ref": "#/$defs/radioTx" },
+        { "$ref": "#/$defs/radioRx" },
+        { "$ref": "#/$defs/sensorReading" },
+        { "$ref": "#/$defs/ledDisplay" },
+        { "$ref": "#/$defs/nodeDistance" }
+      ]
+    },
+    "checkComposite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "conditions"],
+      "properties": {
+        "type": { "enum": ["all", "any", "none"] },
+        "conditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/checkCondition" }
+        }
+      }
     },
     "composite": {
       "type": "object",
@@ -194,13 +220,35 @@
         "layout": { "type": "string", "pattern": "^[#.01]{5}(\\n[#.01]{5}){4}$" }
       }
     },
+    "nodeRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "id"],
+      "properties": {
+        "kind": { "enum": ["device", "source"] },
+        "id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "nodeDistance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "node_a", "node_b"],
+      "properties": {
+        "type": { "const": "node_distance" },
+        "node_a": { "$ref": "#/$defs/nodeRef" },
+        "node_b": { "$ref": "#/$defs/nodeRef" },
+        "min": { "$ref": "#/$defs/nullableNumber" },
+        "max": { "$ref": "#/$defs/nullableNumber" }
+      }
+    },
     "actionTarget": { "type": ["string", "null"] },
     "testAction": {
       "oneOf": [
         { "$ref": "#/$defs/actionRadioBroadcast" },
         { "$ref": "#/$defs/actionPressButton" },
         { "$ref": "#/$defs/actionSetNodeLevel" },
-        { "$ref": "#/$defs/actionAddNode" }
+        { "$ref": "#/$defs/actionAddNode" },
+        { "$ref": "#/$defs/actionMoveNode" }
       ]
     },
     "actionRadioBroadcast": {
@@ -252,6 +300,17 @@
         "duration_seconds": { "type": "number", "minimum": 0, "default": 10 }
       }
     },
+    "actionMoveNode": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "node_id", "x", "y"],
+      "properties": {
+        "type": { "const": "move_node" },
+        "node_id": { "$ref": "#/$defs/actionTarget" },
+        "x": { "type": "number", "minimum": 0, "maximum": 860 },
+        "y": { "type": "number", "minimum": 0, "maximum": 520 }
+      }
+    },
     "testStep": {
       "oneOf": [
         { "$ref": "#/$defs/stepAction" },
@@ -273,8 +332,8 @@
       "required": ["type", "condition"],
       "properties": {
         "type": { "const": "check" },
-        "condition": { "$ref": "#/$defs/condition" },
-        "timeout_seconds": { "type": "number", "minimum": 0, "default": 5 }
+        "condition": { "$ref": "#/$defs/checkCondition" },
+        "timeout_ms": { "type": "number", "minimum": 0, "default": 5000 }
       }
     },
     "testCase": {
@@ -286,7 +345,7 @@
         "points": { "type": "integer", "minimum": 0, "default": 1 },
         "feedback_on_pass": { "type": "string" },
         "feedback_on_fail": { "type": "string" },
-        "trigger": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/testAction" } },
+        "trigger": { "type": "array", "items": { "$ref": "#/$defs/testAction" } },
         "steps": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/testStep" } }
       }
     },

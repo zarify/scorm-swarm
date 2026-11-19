@@ -1,7 +1,14 @@
 import { getConfig, getSceneProject, notifyConfigChange, onConfigChange, onSceneChange } from './app.js';
 import { createDefaultCondition, renderConditionEditor } from './condition-builder.js';
+import { enableListReordering, getSelectionIndexAfterMove, moveListItem } from './list-reorder.js';
 
 let selectedHintIndex = -1;
+
+/**
+ * Section open state, one entry per edited hint object. Never serialized and
+ * never written into the config: it only controls the local disclosure UI.
+ */
+const sectionOpenState = new WeakMap();
 
 export function initHintsTab() {
   document.getElementById('btn-add-hint').addEventListener('click', addHint);
@@ -66,16 +73,30 @@ function renderHintList() {
   }
   hints.forEach((hint, index) => {
     const item = document.createElement('div');
-    item.className = `list-item${index === selectedHintIndex ? ' selected' : ''}`;
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
-    item.setAttribute('aria-pressed', String(index === selectedHintIndex));
+    item.className = `list-item list-item-reorderable${index === selectedHintIndex ? ' selected' : ''}`;
+    item.draggable = true;
+    item.dataset.index = String(index);
+    const select = document.createElement('button');
+    select.type = 'button';
+    select.className = 'list-item-select';
+    select.setAttribute('aria-pressed', String(index === selectedHintIndex));
+    select.setAttribute('aria-keyshortcuts', 'Alt+ArrowUp Alt+ArrowDown');
+    select.title = 'Drag to reorder. Alt+Arrow moves this row.';
     const text = document.createElement('span');
     text.className = 'list-item-title';
     text.textContent = hint.message?.trim() || hint.id || `Hint ${index + 1}`;
     const meta = document.createElement('small');
     meta.className = 'list-item-meta';
     meta.textContent = `${hint.trigger?.event ?? 'unconfigured'} · priority ${hint.priority ?? 1}`;
+    select.append(text, meta);
+    select.addEventListener('click', () => selectHint(index));
+    select.addEventListener('keydown', (event) => {
+      if (!event.altKey || (event.key !== 'ArrowUp' && event.key !== 'ArrowDown')) return;
+      const target = index + (event.key === 'ArrowUp' ? -1 : 1);
+      if (target < 0 || target >= getConfig().hints.length) return;
+      event.preventDefault();
+      moveHint(index, target, event.key === 'ArrowUp' ? 'before' : 'after', true);
+    });
     const remove = document.createElement('button');
     remove.type = 'button';
     remove.className = 'list-item-remove';
@@ -85,16 +106,28 @@ function renderHintList() {
       event.stopPropagation();
       removeHint(index);
     });
-    item.append(text, meta, remove);
-    item.addEventListener('click', () => selectHint(index));
-    item.addEventListener('keydown', (event) => {
-      if (event.key === 'Enter' || event.key === ' ') {
-        event.preventDefault();
-        selectHint(index);
-      }
-    });
+    item.append(select, remove);
     list.append(item);
   });
+  enableListReordering(list, {
+    itemSelector: '.list-item',
+    onMove: moveHint,
+  });
+}
+
+function moveHint(fromIndex, targetIndex, position, restoreFocus = false) {
+  const hints = getConfig().hints;
+  const moved = moveListItem(hints, fromIndex, targetIndex, position);
+  if (!moved || !moved.changed) return;
+  selectedHintIndex = getSelectionIndexAfterMove(selectedHintIndex, moved.fromIndex, moved.insertIndex);
+  notifyConfigChange('hints');
+  renderHintList();
+  renderHintEditor();
+  if (restoreFocus) {
+    const button = document.getElementById('hint-list')
+      ?.querySelector(`.list-item[data-index="${moved.insertIndex}"] .list-item-select`);
+    if (button) button.focus();
+  }
 }
 
 function renderHintEditor() {
@@ -141,13 +174,18 @@ function renderHintEditor() {
     (value) => updateTrigger({ invalidate_on_condition_false: value }), true);
   container.append(grid);
 
-  const conditionShell = document.createElement('div');
+  const conditionShell = document.createElement('details');
   conditionShell.className = 'condition-editor-shell';
-  const conditionHeading = document.createElement('div');
+  conditionShell.open = readSectionState(hint);
+  const conditionHeading = document.createElement('summary');
   conditionHeading.className = 'condition-editor-title';
   conditionHeading.innerHTML = '<strong>Effect condition</strong><small>Evaluated against simulator events</small>';
   const conditionHost = document.createElement('div');
+  conditionHost.className = 'condition-editor-body';
   conditionShell.append(conditionHeading, conditionHost);
+  conditionShell.addEventListener('toggle', () => {
+    sectionOpenState.set(hint, { condition: conditionShell.open });
+  });
   container.append(conditionShell);
   renderConditionEditor({
     container: conditionHost,
@@ -158,7 +196,10 @@ function renderHintEditor() {
 
   function updateHint(patch) {
     const config = getConfig();
-    config.hints[selectedHintIndex] = { ...config.hints[selectedHintIndex], ...patch };
+    const previous = config.hints[selectedHintIndex];
+    const next = { ...previous, ...patch };
+    config.hints[selectedHintIndex] = next;
+    transferSectionState(previous, next);
     notifyConfigChange('hints');
     renderHintList();
   }
@@ -166,16 +207,38 @@ function renderHintEditor() {
   function updateTrigger(patch) {
     const config = getConfig();
     const current = config.hints[selectedHintIndex];
-    config.hints[selectedHintIndex] = { ...current, trigger: { ...current.trigger, ...patch } };
+    const next = { ...current, trigger: { ...current.trigger, ...patch } };
+    config.hints[selectedHintIndex] = next;
+    transferSectionState(current, next);
     notifyConfigChange('hints');
     renderHintList();
   }
 }
 
+function readSectionState(hint) {
+  const state = sectionOpenState.get(hint);
+  if (!state || typeof state.condition !== 'boolean') return true;
+  return state.condition;
+}
+
+function transferSectionState(previous, next) {
+  if (!previous || !next) return;
+  const state = sectionOpenState.get(previous);
+  if (state) sectionOpenState.set(next, state);
+}
+
 function selectHint(index) {
+  // Re-rendering replaces the button that was just activated, so put focus
+  // back on the selected row's button for keyboard users.
+  const restoreFocus = document.activeElement?.classList.contains('list-item-select') === true;
   selectedHintIndex = index;
   renderHintList();
   renderHintEditor();
+  if (restoreFocus) {
+    const button = document.getElementById('hint-list')
+      ?.querySelector(`.list-item[data-index="${index}"] .list-item-select`);
+    if (button) button.focus();
+  }
 }
 
 function clampSelection(hints) {

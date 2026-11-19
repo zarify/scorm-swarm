@@ -51,10 +51,18 @@ export interface BridgeCommand {
     | 'radio-broadcast'
     | 'set-node-level'
     | 'add-node'
+    | 'move-node'
     | 'set-ui-visibility'
-    | 'get-display';
+    | 'get-display'
+    | 'get-node-positions';
   id?: string;
   payload?: unknown;
+}
+export interface NodePosition {
+  kind: 'device' | 'source';
+  id: string;
+  x: number;
+  y: number;
 }
 export interface LearnerCapabilities {
   move_devices: boolean;
@@ -69,6 +77,7 @@ export interface LearnerUiVisibility {
   runtime_log: boolean;
   environment_values: boolean;
   panel_header: boolean;
+  node_coordinates: boolean;
 }
 
 
@@ -78,6 +87,8 @@ export interface SimLearnerBridge {
   sendBundle(id: string | undefined, base64: string): void;
   sendError(id: string | undefined, error: unknown): void;
   sendDisplayState(id: string | undefined, displays: Record<string, number[]>): void;
+  sendAck(id: string | undefined): void;
+  sendNodePositions(id: string | undefined, positions: NodePosition[]): void;
 }
 
 interface BridgeEnvelope {
@@ -111,8 +122,10 @@ const allowedCommands: Record<BridgeCommand['type'], true> = {
   'radio-broadcast': true,
   'set-node-level': true,
   'add-node': true,
+  'move-node': true,
   'set-ui-visibility': true,
   'get-display': true,
+  'get-node-positions': true,
 };
 
 export function installLearnerBridge(): SimLearnerBridge {
@@ -210,6 +223,24 @@ export function installLearnerBridge(): SimLearnerBridge {
         type: 'display',
         ...(id === undefined ? {} : { id }),
         payload: { displays },
+      });
+    },
+    sendAck(id) {
+      send({
+        source: 'swarm-sim-bridge',
+        v: 1,
+        type: 'ack',
+        ...(id === undefined ? {} : { id }),
+        payload: {},
+      });
+    },
+    sendNodePositions(id, positions) {
+      send({
+        source: 'swarm-sim-bridge',
+        v: 1,
+        type: 'node-positions',
+        ...(id === undefined ? {} : { id }),
+        payload: { positions },
       });
     },
   };

@@ -70,6 +70,7 @@
               <label class="capability-row"><span><strong>Radio inspector</strong><small>Live radio message inspector.</small></span><input type="checkbox" id="panel-radio-inspector" checked><span class="toggle-track" aria-hidden="true"></span></label>
               <label class="capability-row"><span><strong>Runtime log</strong><small>Per-device runtime event log.</small></span><input type="checkbox" id="panel-runtime-log"><span class="toggle-track" aria-hidden="true"></span></label>
               <label class="capability-row"><span><strong>Environment values</strong><small>Device sensor readings (light, sound, temperature).</small></span><input type="checkbox" id="panel-env-values" checked><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Node coordinates</strong><small>Show the selected device or environment node’s X and Y position.</small></span><input type="checkbox" id="panel-node-coordinates"><span class="toggle-track" aria-hidden="true"></span></label>
               <label class="capability-row"><span><strong>Canvas header</strong><small>Swarm canvas header bar.</small></span><input type="checkbox" id="panel-header"><span class="toggle-track" aria-hidden="true"></span></label>
             </section>
         </div>
@@ -103,20 +104,20 @@
 
       <section id="tab-hints" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-hints">
         <div id="hints-layout" class="editor-layout">
-          <aside id="hint-list-panel" class="list-panel"><div class="panel-title-row"><div><h3>Hints</h3></div><span id="hint-count" class="count-badge">0</span></div><div id="hint-list"></div><button id="btn-add-hint" class="btn btn-secondary btn-add" type="button">+ Add hint</button></aside>
+          <aside id="hint-list-panel" class="list-panel"><div class="panel-title-row"><div><h3>Hints</h3></div><span id="hint-count" class="count-badge">0</span></div><div id="hint-list"></div><p class="list-help">Drag a row to reorder. Alt+Arrow moves the selected row.</p><button id="btn-add-hint" class="btn btn-secondary btn-add" type="button">+ Add hint</button></aside>
           <section id="hint-editor-panel" class="detail-panel"><div id="hint-editor-content" class="empty-state"><strong>Select a hint to edit</strong><p>Add a hint to define its trigger, message, and display style.</p></div></section>
         </div>
       </section>
 
       <section id="tab-tests" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-tests">
         <div id="tests-layout" class="editor-layout">
-          <aside id="test-list-panel" class="list-panel"><div class="panel-title-row"><div><h3>Graded tests</h3></div><span id="test-count" class="count-badge">0</span></div><div id="test-list"></div><button id="btn-add-test" class="btn btn-secondary btn-add" type="button">+ Add test</button><div id="points-indicator" class="points-indicator"></div></aside>
+          <aside id="test-list-panel" class="list-panel"><div class="panel-title-row"><div><h3>Graded tests</h3></div><span id="test-count" class="count-badge">0</span></div><div id="test-list"></div><p class="list-help">Drag a row to reorder. Alt+Arrow moves the selected row.</p><button id="btn-add-test" class="btn btn-secondary btn-add" type="button">+ Add test</button><div id="points-indicator" class="points-indicator"></div></aside>
           <section id="test-editor-panel" class="detail-panel"><div id="test-editor-content" class="empty-state"><strong>Select a test to edit</strong><p>Add a test and choose the observable behavior that earns its points.</p></div></section>
         </div>
       </section>
 
       <section id="tab-preview" class="tab-panel" role="tabpanel" aria-labelledby="tab-button-preview">
-        <div class="preview-toolbar"><span id="preview-status" class="connection-status"><span id="preview-status-dot" class="status-dot"></span>Waiting for learner simulator…</span><div class="toolbar-actions"><button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button><button id="btn-check-session" class="btn btn-accent" type="button">Check</button></div></div>
+        <div class="preview-toolbar"><span id="preview-status" class="connection-status" role="status"><span id="preview-status-dot" class="status-dot"></span><span id="preview-status-text">Waiting for learner simulator…</span></span><div class="toolbar-actions"><button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button><button id="btn-check-session" class="btn btn-accent" type="button">Check</button></div></div>
         <div class="preview-layout">
           <section class="preview-sim-card"><iframe id="preview-iframe" title="Learner activity preview" src="about:blank"></iframe></section>
           <aside class="preview-side-column">
