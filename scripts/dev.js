@@ -65,8 +65,8 @@ const server = createServer((request, response) => {
   else createReadStream(file).pipe(response);
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`Swarm SCORM static server running at http://127.0.0.1:${port}/builder/`);
+server.listen(port, '0.0.0.0', () => {
+  console.log(`Swarm SCORM static server running at http://0.0.0.0:${port}/builder/`);
 });
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
