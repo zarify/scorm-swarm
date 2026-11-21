@@ -142,7 +142,7 @@ function renderTestEditor() {
 
   const grid = document.createElement('div');
   grid.className = 'field-grid';
-  appendTextField(grid, 'Test ID', testCase.id, (value) => updateTest({ id: value }));
+  appendTextField(grid, 'Test title', testCase.id, (value) => updateTest({ id: value }));
   appendNumberField(grid, 'Points', testCase.points ?? 1, (value) => updateTest({ points: value }), { minimum: 0, integer: true });
   container.append(grid);
 
