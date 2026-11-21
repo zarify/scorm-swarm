@@ -37,7 +37,7 @@ after(async () => {
   if (server) await new Promise((resolveClose) => server.close(resolveClose));
 });
 
-test('learner Check runs scripted tests, keeps the best score, and resets run states', async (t) => {
+test('learner Check runs scripted tests in a modal, keeps the best score, and resets run states', async (t) => {
   assert.ok(browser, 'A Playwright Chromium build is required for browser tests.');
   assert.ok(existsSync(join(packageRoot, 'index.html')), 'Run npm run build before test:browser.');
   const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
@@ -45,14 +45,23 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
   page.on('pageerror', (error) => pageErrors.push(error.message));
   t.after(() => page.close());
   await page.addInitScript(MOCK_SCORM_INIT, { seedModel: { 'cmi.core.student_id': 'learner-7' } });
+  // Runs before the deferred app script, so it captures the shipped markup.
+  await page.addInitScript(() => {
+    document.addEventListener('DOMContentLoaded', () => {
+      window.__checkDisabledAtLoad = document.getElementById('btn-check')?.disabled;
+    }, { once: true });
+  });
   await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
 
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), false);
   await page.waitForFunction(
     () => document.getElementById('status-bar')?.textContent.includes('Activity ready.'),
     undefined,
     { timeout: 20_000 },
   );
   assert.equal(await page.title(), 'Radio Relay Field Lab');
+  assert.equal(await page.textContent('#activity-title'), 'Radio Relay Field Lab');
+  assert.match(await page.textContent('#left-panel'), /💡 Hints/);
   assert.match(await page.textContent('#instructions-content'), /Alice/);
   await page.waitForFunction(
     () => [...document.querySelectorAll('#hint-list .hint-card')]
@@ -60,11 +69,18 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
     undefined,
     { timeout: 10_000 },
   );
-  assert.equal(await page.locator('.checklist-panel #btn-check').count(), 1, 'Check lives in the checklist panel');
-  assert.equal(await page.locator('.checklist-panel #btn-reset-session').count(), 1, 'Reset lives in the checklist panel');
+  assert.equal(await page.locator('#main-layout #left-panel #instructions-panel').count(), 1, 'instructions live on the left');
+  assert.equal(await page.locator('.checklist-panel').count(), 0, 'the old right checklist panel is gone');
+  assert.equal(await page.locator('#controls #btn-check').count(), 1, 'Check sits under the simulator');
+  assert.equal(await page.locator('#controls #btn-reset-session').count(), 1, 'Reset sits under the simulator');
+  assert.equal(await page.locator('#results-modal #check-count').count(), 1, 'the count lives in the modal');
+  assert.equal(await page.textContent('#results-modal-title'), 'Test results');
+  assert.equal(await page.evaluate(() => window.__checkDisabledAtLoad), true, 'Check ships disabled');
+  assert.equal(await page.locator('#btn-check').isEnabled(), true, 'Check is enabled once the runner exists');
 
   await page.click('#btn-check');
   await page.waitForFunction(() => document.getElementById('check-count')?.textContent.trim() === '3 / 3');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), true);
   let model = await readLmsModel(page);
   assert.equal(model['cmi.core.score.raw'], '100');
   assert.equal(model['cmi.core.score.min'], '0');
@@ -72,10 +88,23 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
   assert.equal(model['cmi.core.lesson_status'], 'completed');
   assert.ok(model.__commits >= 2, 'initialization and Check reached the LMS');
 
+  // Close button dismissal, then focus returns to Check once the run settled.
+  await page.click('#btn-close-results-modal');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), false);
+  await page.waitForFunction(() => document.activeElement?.id === 'btn-check');
+
   const simulatorFrame = page.frames().find((frame) => frame.url().includes('/sim/index.html'));
   assert.ok(simulatorFrame, 'learner simulator iframe should be present');
   await simulatorFrame.locator('#stub-mode').uncheck();
   await page.click('#btn-check');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), true);
+  await page.keyboard.press('Escape');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), false);
+  await page.waitForFunction(
+    () => document.activeElement?.id === 'btn-reset-session',
+    undefined,
+    { timeout: 2000 },
+  );
   await page.waitForFunction(() => document.getElementById('check-count')?.textContent.trim() === '2 / 3');
   const secondRun = await page.$$eval('#test-checklist .test-row', (rows) =>
     rows.map((row) => [row.dataset.status, row.querySelector('strong')?.textContent]),
@@ -85,27 +114,91 @@ test('learner Check runs scripted tests, keeps the best score, and resets run st
     ['passed', 'button-a-display'],
     ['passed', 'bob-hears-ping'],
   ]);
+  const failedDetail = await page.textContent('#test-checklist .test-row[data-status="failed"] .test-result-detail');
+  assert.equal(failedDetail, 'Test timed out.');
+  assert.doesNotMatch(failedDetail, /Step|\bms\b/);
   model = await readLmsModel(page);
   assert.equal(model['cmi.core.score.raw'], '100', 'a lower Check cannot downgrade the session best');
   assert.equal(model['cmi.core.lesson_status'], 'completed');
   assert.ok(model.__commits >= 3, 'the second Check reached the LMS');
+
+  // Backdrop dismissal uses click coordinates outside the dialog box.
+  await page.click('#btn-check');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), true);
+  await page.mouse.click(4, 4);
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), false);
+  await page.waitForFunction(
+    () => document.activeElement?.id === 'btn-reset-session',
+    undefined,
+    { timeout: 2000 },
+  );
+  await page.waitForFunction(() => document.getElementById('check-count')?.textContent.trim() === '2 / 3');
 
   await page.click('#btn-reset-session');
   await page.waitForFunction(() =>
     [...document.querySelectorAll('#test-checklist .test-row')].every((row) => row.dataset.status === 'not run'),
   );
   assert.equal(await page.textContent('#check-count'), '0 / 3');
+  assert.equal(await page.evaluate(() => document.getElementById('results-modal').open), false, 'Reset does not reopen the modal');
+  assert.equal(await page.evaluate(() => document.getElementById('check-error').hidden), true);
+
+  // Desktop composition: one grid, sidebar before the simulator, system sans.
+  const layout = await page.evaluate(() => {
+    const left = document.getElementById('left-panel').getBoundingClientRect();
+    const simulator = document.getElementById('simulator-frame').getBoundingClientRect();
+    const title = getComputedStyle(document.getElementById('activity-title'));
+    const instructions = getComputedStyle(document.getElementById('instructions-content'));
+    const panel = getComputedStyle(document.getElementById('left-panel'));
+    return {
+      leftRight: left.right,
+      simulatorLeft: simulator.left,
+      titleFont: title.fontFamily,
+      titleSize: title.fontSize,
+      instructionsSize: instructions.fontSize,
+      borderWidth: panel.borderRightWidth,
+      overflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+    };
+  });
+  assert.ok(layout.leftRight <= layout.simulatorLeft + 0.5, 'the sidebar ends before the simulator begins');
+  assert.match(layout.titleFont, /system-ui|-apple-system|Segoe UI|Roboto/);
+  assert.equal(layout.titleSize, '18px');
+  assert.equal(layout.instructionsSize, '15px');
+  assert.equal(layout.borderWidth, '1px');
+  assert.equal(layout.overflow, false);
+
+  // Narrow composition: stacked, no horizontal overflow, controls reachable.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const narrow = await page.evaluate(() => {
+    const left = document.getElementById('left-panel').getBoundingClientRect();
+    const simulator = document.getElementById('simulator-frame').getBoundingClientRect();
+    return {
+      leftBottom: left.bottom,
+      simulatorTop: simulator.top,
+      horizontalOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    };
+  });
+  assert.ok(narrow.leftBottom <= narrow.simulatorTop + 0.5, 'the sidebar stacks above the simulator');
+  assert.equal(narrow.horizontalOverflow, false);
+  await page.locator('#btn-check').scrollIntoViewIfNeeded();
+  const controls = await page.evaluate(() => {
+    const rect = document.getElementById('btn-check').getBoundingClientRect();
+    return { top: rect.top, bottom: rect.bottom, height: window.innerHeight, width: rect.width };
+  });
+  assert.ok(controls.top >= 0 && controls.bottom <= controls.height, 'Check is reachable in the viewport');
+  assert.ok(controls.width > 0);
   assert.deepEqual(pageErrors, []);
 });
 
-test('oversized scene state is saved as an IndexedDB reference and restored after reload', async (t) => {
+test('oversized scene state is bound to its attempt and a new attempt starts from the package', async (t) => {
   assert.ok(browser, 'A Playwright Chromium build is required for browser tests.');
   assert.ok(existsSync(join(packageRoot, 'index.html')), 'Run npm run build before test:browser.');
-  const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
+  const context = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  t.after(() => context.close());
+  const studentId = 'learner-scene-big';
+  await context.addInitScript(MOCK_SCORM_INIT, { seedModel: { 'cmi.core.student_id': studentId } });
   const pageErrors = [];
+  const page = await context.newPage();
   page.on('pageerror', (error) => pageErrors.push(error.message));
-  t.after(() => page.close());
-  await page.addInitScript(MOCK_SCORM_INIT, { seedModel: { 'cmi.core.student_id': 'learner-scene-big' } });
   await page.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(
     () => document.getElementById('status-bar')?.textContent.includes('Activity ready.'),
@@ -118,7 +211,8 @@ test('oversized scene state is saved as an IndexedDB reference and restored afte
   assert.ok(bigBundle.length > 4096, 'fixture bundle must exceed the suspend_data cap');
   await injectSceneBundle(page, bigBundle);
 
-  // The debounced cache save lands as an IndexedDB record plus an `I` reference.
+  // The debounced cache save lands as an IndexedDB record, an `I` reference,
+  // and the standard bookmark that binds both to this LMS attempt.
   await page.waitForFunction(
     () => {
       const model = JSON.parse(localStorage.getItem('mock-scorm-model') || '{}');
@@ -127,6 +221,9 @@ test('oversized scene state is saved as an IndexedDB reference and restored afte
     undefined,
     { timeout: 10_000 },
   );
+  const attemptA = await readLmsModel(page);
+  assert.match(attemptA['cmi.core.lesson_location'], /^swarm-scene-v1:[a-f0-9]{32}$/);
+  const bookmarkA = attemptA['cmi.core.lesson_location'];
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(
@@ -135,6 +232,7 @@ test('oversized scene state is saved as an IndexedDB reference and restored afte
     { timeout: 20_000 },
   );
   const model = await readLmsModel(page);
+  assert.equal(model['cmi.core.lesson_location'], bookmarkA, 'the same attempt keeps its binding');
   assert.match(model['cmi.suspend_data'], /^BS1\|[^|]*\|I\|/, 'the reference survives the reload untouched');
   const simulatorFrame = page.frames().find((frame) => frame.url().includes('/sim/index.html'));
   assert.ok(simulatorFrame, 'learner simulator iframe should be present');
@@ -142,6 +240,47 @@ test('oversized scene state is saved as an IndexedDB reference and restored afte
     (expectedStatus) => document.getElementById('simulator-status')?.textContent === expectedStatus,
     `bundle loaded: ${bigBundle.length} chars`,
     { timeout: 10_000 },
+  );
+
+  // Close the settled SCO before switching the runtime to a new attempt, so
+  // its unload handler cannot write attempt A's scene into attempt B.
+  await page.close();
+  const setup = await context.newPage();
+  await setup.goto(`${origin}/sim/index.html`, { waitUntil: 'domcontentloaded' });
+  await setup.evaluate((id) => {
+    localStorage.setItem('mock-scorm-model', JSON.stringify({
+      'cmi.core.student_id': id,
+      'cmi.core.entry': 'ab-initio',
+      __initializes: 1,
+      __commits: 1,
+      __finishes: 1,
+    }));
+  }, studentId);
+  await setup.close();
+
+  const freshPage = await context.newPage();
+  freshPage.on('pageerror', (error) => pageErrors.push(error.message));
+  await freshPage.goto(`${origin}/index.html`, { waitUntil: 'domcontentloaded' });
+  await freshPage.waitForFunction(
+    () => document.getElementById('status-bar')?.textContent.includes('Activity ready.'),
+    undefined,
+    { timeout: 20_000 },
+  );
+  const freshModel = await readLmsModel(freshPage);
+  assert.equal(freshModel['cmi.suspend_data'] || '', '', 'a new attempt attaches no earlier payload');
+  assert.equal(freshModel['cmi.core.lesson_location'] || '', '', 'a new attempt attaches no earlier bookmark');
+  const freshFrame = freshPage.frames().find((frame) => frame.url().includes('/sim/index.html'));
+  assert.ok(freshFrame, 'the fresh attempt still connects the simulator');
+  assert.ok(
+    freshFrame.url().includes('/sim/index.html?mode=learner&bundle=../config/scene.swarm'),
+    'a fresh attempt loads the packaged scene',
+  );
+  await freshPage.waitForTimeout(500);
+  const freshStatus = await freshFrame.evaluate(() => document.getElementById('simulator-status')?.textContent);
+  assert.notEqual(
+    freshStatus,
+    `bundle loaded: ${bigBundle.length} chars`,
+    'attempt A\'s browser-only scene never reaches attempt B',
   );
   assert.deepEqual(pageErrors, []);
 });

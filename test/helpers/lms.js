@@ -18,6 +18,7 @@ export function createLms({
   suspendDataLimit = null,
   rejectSuspendData = false,
   rejectAllWrites = false,
+  rejectKeys = [],
 } = {}) {
   const model = new Map();
   const calls = [];
@@ -40,6 +41,7 @@ export function createLms({
     LMSSetValue(key, value) {
       record('LMSSetValue', [key, value]);
       const rejectedWrite = rejectAllWrites
+        || rejectKeys.includes(key)
         || (key === SUSPEND_DATA_KEY && rejectSuspendData);
       if (rejectedWrite) {
         rejected.push({ key, value });

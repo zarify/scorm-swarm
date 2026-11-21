@@ -276,11 +276,9 @@ export function createTestRunner({
       if (outcome.cancelled) return result(false, null, 'cancelled');
       if (!outcome.passed) {
         if (outcome.detail) return result(false, stepIndex, outcome.detail);
-        return result(
-          false,
-          stepIndex,
-          `Step ${stepIndex + 1} timed out after ${checkTimeoutMs(step)} ms.`,
-        );
+        // Learners see the outcome, not the wait it took to reach it: a
+        // zero-deadline check was evaluated immediately, so it cannot time out.
+        return result(false, stepIndex, checkTimeoutMs(step) > 0 ? 'Test timed out.' : 'Condition not met.');
       }
       since = nowFn();
     }

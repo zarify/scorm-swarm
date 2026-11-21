@@ -9,33 +9,46 @@
 </head>
 <body>
   <div id="app">
-    <section class="instruction-strip">
-      <article id="instructions-panel" class="instruction-panel">
-        <p class="eyebrow">Your mission</p>
-        <div id="instructions-content" class="formatted-text">Loading instructions…</div>
-      </article>
-      <aside id="hint-panel" class="hint-panel" aria-live="polite">
-        <div class="panel-title-row"><div><p class="eyebrow">Scaffolding</p><h2>Hints</h2></div><span id="hint-count" class="count-badge">0</span></div>
-        <div id="hint-list"><p class="hint-empty">Hints appear as you explore.</p></div>
-        <button id="btn-request-hint" class="btn btn-secondary" type="button" hidden>Request a hint</button>
-      </aside>
-    </section>
+    <header id="status-bar" class="status-bar status-info" role="status" aria-live="polite">Starting learner session…</header>
 
-    <main class="activity-layout">
-      <section class="simulator-panel" aria-label="Swarm simulation">
-        <iframe id="simulator-frame" title="Interactive micro:bit swarm simulation" src="about:blank"></iframe>
-      </section>
-      <aside class="checklist-panel" aria-label="Test checklist">
-        <div class="panel-title-row"><div><p class="eyebrow">Evidence to collect</p><h2>Test checklist</h2></div><span id="check-count" class="count-badge">0 / 0</span></div>
-        <div id="test-checklist" class="test-checklist"><p class="empty-note">Loading tests…</p></div>
-        <div class="checklist-actions">
-          <button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button>
-          <button id="btn-check" class="btn btn-primary" type="button">Check</button>
+    <div id="main-layout">
+      <aside id="left-panel">
+        <div id="instructions-panel" class="panel">
+          <h2 id="activity-title">Swarm activity</h2>
+          <div id="instructions-content" class="formatted-text">Loading instructions…</div>
+
+          <div id="hint-panel" class="hints-inline" aria-live="polite">
+            <h3>💡 Hints</h3>
+            <div id="hint-list"><p class="hint-empty">Hints appear as you explore.</p></div>
+            <button id="btn-request-hint" class="btn btn-secondary" type="button" hidden>Request a hint</button>
+          </div>
         </div>
-        <div id="status-bar" class="status-bar status-info" role="status" aria-live="polite">Starting learner session…</div>
       </aside>
-    </main>
+
+      <main id="workspace-area">
+        <div class="simulator-wrapper">
+          <iframe id="simulator-frame" title="Interactive micro:bit swarm simulation" src="about:blank"></iframe>
+        </div>
+        <div id="controls">
+          <button id="btn-check" class="btn btn-primary" type="button" disabled>✓ Check</button>
+          <button id="btn-reset-session" class="btn btn-secondary" type="button">Reset session</button>
+        </div>
+      </main>
+    </div>
   </div>
+
+  <dialog id="results-modal" class="results-modal-dialog" aria-labelledby="results-modal-title">
+    <header class="results-modal-header">
+      <h2 id="results-modal-title">Test results</h2>
+      <button id="btn-close-results-modal" class="btn btn-secondary results-modal-close" type="button" aria-label="Close results" autofocus>✕</button>
+    </header>
+    <div class="results-modal-body">
+      <p id="check-count" class="check-count">0 / 0</p>
+      <div id="test-checklist" class="test-checklist"><p class="empty-note">Loading tests…</p></div>
+      <p id="check-error" class="check-error" role="alert" hidden></p>
+    </div>
+  </dialog>
+
   <script defer src="js/app.bundle.js"></script>
 </body>
 </html>

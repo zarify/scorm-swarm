@@ -24,6 +24,8 @@ let bridgeReady = false;
 let checkErrorShown = false;
 let hintTimer;
 let terminated = false;
+let lastSuspendData = null;
+let lastBookmark = null;
 let runActive = false;
 let runProgress = new Map();
 let persistence = null;
@@ -61,18 +63,26 @@ async function startActivity() {
     document.getElementById('btn-check').addEventListener('click', () => void runChecks());
     document.getElementById('btn-reset-session').addEventListener('click', () => void resetSession());
     document.getElementById('btn-request-hint').addEventListener('click', () => evaluateHintEvent({ type: 'manual' }));
+    wireResultsModal();
     document.addEventListener('visibilitychange', () => {
+      if (terminated) return;
       if (document.visibilityState !== 'hidden') return;
       flushSceneSaveNow();
     });
     window.addEventListener('pagehide', finishSession);
     window.addEventListener('pageshow', (event) => {
       if (!event.persisted) return;
+      const resumed = scorm.resume();
+      const attemptChanged = lastSuspendData !== null
+        && (scorm.getSuspendData() !== lastSuspendData || scorm.getSceneBookmark() !== lastBookmark);
+      // A BFCache return into a different (or brand-new) LMS attempt must not
+      // let this page's stale scene overwrite the attempt the learner sees.
+      if (!resumed || (terminated && (attemptChanged || scorm.getEntry() === 'ab-initio'))) return;
       terminated = false;
-      scorm.resume();
     });
     await connectSimulator(restoredSceneBase64);
     runner = createTestRunner({ testCases: config.evaluation.test_cases, bridge, onEvent: handleSimulatorEvent });
+    document.getElementById('btn-check').disabled = false;
     // Cache the freshly connected scene without saving it: the packaged scene
     // is not student progress, and a save here would shadow a later oversized
     // state with a small snapshot that fits suspend_data.
@@ -82,7 +92,7 @@ async function startActivity() {
     } else if (restored.notice) {
       setStatus(restored.notice, 'warning');
     } else {
-      setStatus('Activity ready. Explore the swarm, then check your evidence.', 'info');
+      setStatus('Activity ready. Explore the swarm, then select Check.', 'info');
     }
   } catch (error) {
     setStatus(error instanceof Error ? error.message : String(error), 'error');
@@ -90,9 +100,11 @@ async function startActivity() {
 }
 
 function renderInstructions() {
-  document.title = config.metadata.title || 'Swarm activity';
+  const title = config.metadata.title || 'Swarm activity';
+  document.title = title;
+  document.getElementById('activity-title').textContent = title;
   document.getElementById('instructions-content').innerHTML = renderInlineMarkdown(
-    config.metadata.instructions_markdown || 'Explore the scene and look for evidence of the system at work.',
+    config.metadata.instructions_markdown || 'Explore the scene, then select Check.',
   );
 }
 
@@ -142,6 +154,7 @@ function scheduleSceneCacheSave() {
 }
 
 async function saveSceneCacheNow() {
+  if (terminated) return;
   await refreshSceneCache();
   if (typeof sceneCache !== 'string' || sceneCache.length === 0) return;
   if (!persistence) return;
@@ -200,7 +213,10 @@ async function runChecks() {
   button.disabled = true;
   button.textContent = 'Running…';
   runProgress = new Map();
+  clearCheckError();
   if (checkErrorShown) clearStatus();
+  renderChecklist();
+  openResultsModal();
   recordCheckAttempt(hintState);
   try {
     const outcome = await runner.runAll({ onProgress: renderRunProgress });
@@ -216,7 +232,9 @@ async function runChecks() {
       failedCheckCount: outcome.results.filter((result) => !result.passed).length,
     });
   } catch (error) {
-    setStatus(`Test run failed: ${error instanceof Error ? error.message : String(error)}`, 'error');
+    const message = `Test run failed: ${error instanceof Error ? error.message : String(error)}`;
+    setStatus(message, 'error');
+    showCheckError(message);
     checkErrorShown = true;
   } finally {
     runActive = false;
@@ -235,6 +253,7 @@ async function resetSession() {
   hintTimer = undefined;
   clearTimeout(sceneSaveTimer);
   sceneSaveTimer = null;
+  clearCheckError();
   renderChecklist();
   renderHints();
   setStatus('Session evidence reset. The scene remains loaded.', 'info');
@@ -286,7 +305,6 @@ function renderChecklist(results = [], { showFeedback = false, progress = runPro
     const points = testCase.points ?? 1;
     const row = document.createElement('div');
     row.className = 'test-row';
-    row.dataset.passed = String(state === 'passed');
     row.dataset.status = state;
     const mark = document.createElement('span');
     mark.className = 'test-row-mark';
@@ -329,7 +347,6 @@ function renderHints(result = evaluateHints(config.hints, hintState, { type: 'ti
     empty.textContent = 'Hints appear as you explore.';
     list.append(empty);
   }
-  document.getElementById('hint-count').textContent = String(result.visibleHints.length);
   for (const hint of result.visibleHints) {
     const card = document.createElement(hint.display_mode === 'checklist' ? 'div' : 'article');
     card.className = hint.display_mode === 'checklist' ? 'hint-checklist-item' : 'hint-card';
@@ -361,6 +378,46 @@ function clearStatus() {
   status.className = 'status-bar status-info';
   checkErrorShown = false;
 }
+
+function wireResultsModal() {
+  const dialog = document.getElementById('results-modal');
+  document.getElementById('btn-close-results-modal').addEventListener('click', () => dialog.close());
+  // Clicks on dialog whitespace (header/body padding) target the dialog too,
+  // so only coordinates outside its box count as a backdrop dismissal.
+  dialog.addEventListener('click', (event) => {
+    if (event.target !== dialog) return;
+    const bounds = dialog.getBoundingClientRect();
+    const outside = event.clientX < bounds.left
+      || event.clientX > bounds.right
+      || event.clientY < bounds.top
+      || event.clientY > bounds.bottom;
+    if (outside) dialog.close();
+  });
+  dialog.addEventListener('close', () => {
+    const check = document.getElementById('btn-check');
+    const target = check.disabled ? document.getElementById('btn-reset-session') : check;
+    // The browser restores focus to the dialog opener as part of closing;
+    // run after that so the learner lands on the control that can continue.
+    setTimeout(() => target.focus(), 0);
+  });
+}
+
+function openResultsModal() {
+  const dialog = document.getElementById('results-modal');
+  if (!dialog.open) dialog.showModal();
+}
+
+function showCheckError(message) {
+  const error = document.getElementById('check-error');
+  error.textContent = message;
+  error.hidden = false;
+}
+
+function clearCheckError() {
+  const error = document.getElementById('check-error');
+  error.textContent = '';
+  error.hidden = true;
+}
 function finishSession() {
   if (terminated) return;
   terminated = true;
@@ -369,6 +426,8 @@ function finishSession() {
   hintTimer = undefined;
   // persistNow is synchronous suspend_data writes, so the save survives teardown.
   flushSceneSaveNow();
+  lastSuspendData = scorm.getSuspendData();
+  lastBookmark = scorm.getSceneBookmark();
   scorm.terminate();
 }
 

@@ -223,7 +223,7 @@ test('repeated trigger actions fire count times with interval between fires', as
     { device_id: 'alice', button: 'A' },
   ]);
   assert.equal(outcome.results[0].passed, false);
-  assert.equal(outcome.results[0].detail, 'Step 1 timed out after 0 ms.');
+  assert.equal(outcome.results[0].detail, 'Condition not met.');
 });
 
 test('radio broadcast commands carry UTF-8 base64 payload, channel, and group', async () => {
@@ -288,7 +288,7 @@ test('a passing chain scores points; the first failing step stops the chain', as
     id: 'press-a', passed: true, failedStepIndex: null, detail: 'passed', points: 2,
   });
   assert.deepEqual(outcome.results[1], {
-    id: 'never', passed: false, failedStepIndex: 0, detail: 'Step 1 timed out after 0 ms.', points: 3,
+    id: 'never', passed: false, failedStepIndex: 0, detail: 'Condition not met.', points: 3,
   });
   // One trigger press per test: the failing first check stops each chain.
   assert.equal(h.commands.filter((command) => command.type === 'press-button').length, 2);
@@ -423,7 +423,8 @@ test('checks are order-sensitive: evidence before the previous check resolve tim
   const failOutcome = await failRunner.runAll();
   assert.equal(failOutcome.results[0].passed, false);
   assert.equal(failOutcome.results[0].failedStepIndex, 1);
-  assert.equal(failOutcome.results[0].detail, 'Step 2 timed out after 400 ms.');
+  assert.equal(failOutcome.results[0].detail, 'Test timed out.');
+  assert.doesNotMatch(failOutcome.results[0].detail, /Step 2|\bms\b/);
 });
 
 test('an action step executes mid-chain and its evidence is checkable immediately after', async () => {
@@ -584,7 +585,7 @@ test('an event after the deadline cannot satisfy a check, an earlier one can', a
   h.schedule(1126, { kind: 'serial', device_id: 'alice', text: 'late' });
   const outcome = await runner.runAll();
   assert.equal(outcome.results[0].passed, false);
-  assert.equal(outcome.results[0].detail, 'Step 1 timed out after 125 ms.');
+  assert.equal(outcome.results[0].detail, 'Test timed out.');
 
   const h2 = createHarness();
   h2.schedule(1124, { kind: 'serial', device_id: 'alice', text: 'late' });
@@ -614,7 +615,7 @@ test('a missing display reply ends the check instead of hanging', async () => {
     steps: [checkStep({ type: 'led_display', device_id: 'alice', layout: HAPPY_LAYOUT }, 300)],
   })]).runAll();
   assert.equal(outcome.results[0].passed, false);
-  assert.equal(outcome.results[0].detail, 'Step 1 timed out after 300 ms.');
+  assert.equal(outcome.results[0].detail, 'Test timed out.');
 });
 
 test('a missing position reply times out instead of claiming an unknown node', async () => {
@@ -630,7 +631,7 @@ test('a missing position reply times out instead of claiming an unknown node', a
     }, 300)],
   })]).runAll();
   assert.equal(outcome.results[0].passed, false);
-  assert.equal(outcome.results[0].detail, 'Step 1 timed out after 300 ms.');
+  assert.equal(outcome.results[0].detail, 'Test timed out.');
 });
 
 test('a zero-timeout distance check reads the position an acknowledged move produced', async () => {

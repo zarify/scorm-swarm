@@ -459,6 +459,78 @@ test('terminate flushes uncommitted writes before it finishes the session', asyn
   assert.equal(lms.commits.length, 1);
 });
 
+test('entry and bookmark getters return the raw LMS strings and are empty offline', async (t) => {
+  const lms = lmsFor(t);
+  seed(lms, 'cmi.core.lesson_status', 'incomplete');
+  seed(lms, 'cmi.core.entry', 'ab-initio');
+  seed(lms, 'cmi.core.lesson_location', 'another-tool-bookmark');
+  const wrapper = await loadWrapper();
+
+  assert.equal(wrapper.getEntry(), '');
+  assert.equal(wrapper.getSceneBookmark(), '');
+
+  wrapper.init();
+  assert.equal(wrapper.getEntry(), 'ab-initio');
+  assert.equal(wrapper.getSceneBookmark(), 'another-tool-bookmark');
+
+  wrapper.terminate();
+  assert.equal(wrapper.getEntry(), '');
+  assert.equal(wrapper.getSceneBookmark(), '');
+});
+
+test('setSceneBookmark stores a Swarm token, validates its shape, and rides the commit throttle', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { lms, wrapper } = await startedSession(t);
+  const commits = lms.commits.length;
+  const token = `swarm-scene-v1:${'0123456789abcdef'.repeat(2)}`;
+
+  assert.equal(wrapper.setSceneBookmark(token), true);
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), token);
+  assert.equal(lms.commits.length, commits, 'a bookmark save must not add a forced commit');
+
+  assert.equal(wrapper.setSceneBookmark(`swarm-scene-v1:${'A'.repeat(32)}`), false);
+  assert.equal(wrapper.setSceneBookmark(`swarm-scene-v1:${'a'.repeat(31)}`), false);
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), token);
+
+  assert.equal(wrapper.setSceneBookmark(''), true);
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), '');
+  assert.equal(wrapper.isSceneBookmark(token), true);
+  assert.equal(wrapper.isSceneBookmark(''), false);
+  assert.equal(wrapper.isSceneBookmark('swarm-scene-v1:nope'), false);
+});
+
+test('a refused bookmark write reports failure and leaves the previous value', async (t) => {
+  quiet(t);
+  const { lms, wrapper } = await startedSession(t, { rejectKeys: ['cmi.core.lesson_location'] });
+  seed(lms, 'cmi.core.lesson_location', 'foreign');
+
+  assert.equal(wrapper.setSceneBookmark(`swarm-scene-v1:${'b'.repeat(32)}`), false);
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), 'foreign');
+});
+
+test('terminate marks the attempt suspendable when a Swarm bookmark is stored', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const { lms, wrapper } = await startedSession(t);
+
+  assert.equal(wrapper.setSceneBookmark(`swarm-scene-v1:${'c'.repeat(32)}`), true);
+  wrapper.terminate();
+
+  assert.equal(lms.valueOf('cmi.core.exit'), 'suspend');
+  const exitAt = lms.calls.findIndex((call) => call.method === 'LMSSetValue' && call.args[0] === 'cmi.core.exit');
+  const commitAt = lms.calls.findIndex((call) => call.method === 'LMSCommit');
+  const finishAt = lms.calls.findIndex((call) => call.method === 'LMSFinish');
+  assert.ok(exitAt !== -1 && exitAt < commitAt && commitAt < finishAt, 'exit lands before the commit and finish');
+  assert.equal(lms.commits.at(-1)['cmi.core.exit'], 'suspend');
+});
+
+test('terminate leaves exit alone without Swarm state, and ignores a foreign bookmark', async (t) => {
+  const { lms, wrapper } = await startedSession(t);
+  seed(lms, 'cmi.core.lesson_location', 'another-tool-bookmark');
+
+  wrapper.terminate();
+  assert.equal(lms.valueOf('cmi.core.exit'), '');
+});
+
 test('after terminate nothing else reaches the LMS, and terminating again is a no-op', async (t) => {
   quiet(t);
   const lms = lmsFor(t);

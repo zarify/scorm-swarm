@@ -175,12 +175,13 @@ function createFakeIndexedDb({ failOpen = false } = {}) {
  * Extra controllers created through `openController` share the same LMS, which
  * is what a later page load looks like.
  */
-function startSession(t, { lms = {}, indexedDb = false, connect = true, persistence = {} } = {}) {
+function startSession(t, { lms = {}, indexedDb = false, connect = true, persistence = {}, seed = {} } = {}) {
   const fake = indexedDb ? createFakeIndexedDb(indexedDb === true ? {} : indexedDb) : null;
   if (fake) globalThis.indexedDB = fake.indexedDB;
   else delete globalThis.indexedDB;
 
   const server = installLms(lms);
+  for (const [key, value] of Object.entries(seed)) server.model.set(key, value);
   t.mock.timers.enable({ apis: ['setTimeout'] });
   // Swallowed: the module's warnings are asserted through the mock's calls.
   const warn = t.mock.method(console, 'warn', () => {});
@@ -193,10 +194,12 @@ function startSession(t, { lms = {}, indexedDb = false, connect = true, persiste
     ...options,
   });
 
-  const controller = openController(persistence);
-
   if (connect) scorm.init();
   else scorm.terminate();
+
+  // The controller reads the LMS entry mode when it is created, so it must
+  // follow init exactly like the learner app does.
+  const opened = openController(persistence);
 
   t.after(() => {
     scorm.terminate();
@@ -204,7 +207,7 @@ function startSession(t, { lms = {}, indexedDb = false, connect = true, persiste
     delete globalThis.indexedDB;
   });
 
-  return { lms: server, fake, controller, openController, warnings, warn };
+  return { lms: server, fake, controller: opened, openController, warnings, warn };
 }
 
 /** Warnings the persistence module itself logged (the SCORM wrapper logs its own). */
@@ -212,6 +215,13 @@ function persistenceWarnings(warn) {
   return warn.mock.calls
     .map((call) => String(call.arguments[0]))
     .filter((message) => message.startsWith('[SessionPersistence]'));
+}
+
+/** Let the fire-and-forget cleanup transactions settle. */
+async function flushTasks(turns = 20) {
+  for (let turn = 0; turn < turns; turn += 1) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 }
 
 /** Number of writes the module made through the LMS's suspend_data field. */
@@ -784,4 +794,254 @@ test('discard clears both layers and keeps the given state as the baseline', asy
   // A changed scene stores again, into both layers.
   assert.equal(await controller.persist(sceneState(3)), 'suspend_data');
   assert.equal(fake.store.size, 1);
+});
+
+/* -------------------------------------------------------------------------- */
+/* Attempt binding                                                            */
+/* -------------------------------------------------------------------------- */
+
+const BOOKMARK_PATTERN = /^swarm-scene-v1:[a-f0-9]{32}$/;
+
+test('browser state is bound to one LMS attempt, and a new attempt starts clean', async (t) => {
+  const { lms, fake, controller, openController } = startSession(t, { indexedDb: true });
+  const sceneA = hugeState();
+  assert.equal(await controller.persist(sceneA), 'indexeddb');
+  const bookmarkA = lms.valueOf('cmi.core.lesson_location');
+  assert.match(bookmarkA, BOOKMARK_PATTERN);
+  assert.equal(fake.only().bookmark, bookmarkA);
+  const payloadA = lms.valueOf(SUSPEND_DATA);
+  assert.match(payloadA, /^BS1\|[^|]*\|I\|/);
+
+  // Same attempt: a rejected/truncated suspend payload does not hide the copy.
+  lms.model.set(SUSPEND_DATA, payloadA.slice(0, 40));
+  const sameAttempt = await openController().restore();
+  assert.equal(sameAttempt.source, 'indexeddb');
+  assert.equal(sameAttempt.notice, null);
+  assert.deepEqual(sameAttempt.state, sceneA);
+
+  // A new Moodle attempt starts with empty tracked fields and ab-initio.
+  clearSuspendDataFromLms(lms);
+  lms.model.delete('cmi.core.lesson_location');
+  lms.model.set('cmi.core.entry', 'ab-initio');
+  const attemptB = openController();
+  assert.deepEqual(await attemptB.restore(), { state: null, source: null, savedAt: 0, notice: null });
+  assert.equal(fake.store.size, 1, 'attempt A’s browser record stays for attempt A');
+
+  const sceneB = { scene_bundle_base64: noisyText(6000, 0x51ed270b) };
+  assert.equal(await attemptB.persist(sceneB), 'indexeddb');
+  const bookmarkB = lms.valueOf('cmi.core.lesson_location');
+  assert.match(bookmarkB, BOOKMARK_PATTERN);
+  assert.notEqual(bookmarkB, bookmarkA);
+  assert.equal(fake.store.size, 2);
+  const payloadB = lms.valueOf(SUSPEND_DATA);
+
+  // Back on attempt A (Continue): its own browser copy restores.
+  lms.model.set(SUSPEND_DATA, payloadA);
+  lms.model.set('cmi.core.lesson_location', bookmarkA);
+  lms.model.set('cmi.core.entry', 'resume');
+  const restoredA = await openController().restore();
+  assert.equal(restoredA.source, 'indexeddb');
+  assert.deepEqual(restoredA.state, sceneA);
+
+  // Reset attempt B: only B’s record and bookmark are cleared.
+  lms.model.set(SUSPEND_DATA, payloadB);
+  lms.model.set('cmi.core.lesson_location', bookmarkB);
+  const attemptB2 = openController();
+  await attemptB2.restore();
+  await attemptB2.discard();
+  assert.equal(fake.store.size, 1);
+  assert.deepEqual(fake.only().state, sceneA);
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), '');
+
+  // Attempt A still restores after B was reset.
+  lms.model.set(SUSPEND_DATA, payloadA);
+  lms.model.set('cmi.core.lesson_location', bookmarkA);
+  const restoredAgain = await openController().restore();
+  assert.equal(restoredAgain.source, 'indexeddb');
+  assert.deepEqual(restoredAgain.state, sceneA);
+});
+
+test('a fresh attempt clears recognised Swarm leftovers instead of reattaching them', async (t) => {
+  const leftover = encodeSessionState({
+    activityId: ACTIVITY_ID,
+    state: sceneState(7),
+    savedAt: 111,
+    limit: SPEC_LIMIT,
+  });
+  const bookmark = `swarm-scene-v1:${'d'.repeat(32)}`;
+  const { lms, fake, controller } = startSession(t, {
+    indexedDb: true,
+    seed: {
+      'cmi.core.entry': 'ab-initio',
+      [SUSPEND_DATA]: leftover,
+      'cmi.core.lesson_location': bookmark,
+    },
+  });
+
+  assert.deepEqual(await controller.restore(), { state: null, source: null, savedAt: 0, notice: null });
+  assert.equal(lms.valueOf(SUSPEND_DATA), '');
+  assert.equal(lms.valueOf('cmi.core.lesson_location'), '');
+  assert.equal(fake.store.size, 0);
+});
+
+test('a tokenless IndexedDB record is never restored without an attempt binding', async (t) => {
+  const { lms, fake, controller, openController } = startSession(t, { indexedDb: true });
+  await controller.persist(sceneState(2));
+  const bound = fake.only();
+  const legacyKey = bound.key.replace(/::swarm-scene-v1:[a-f0-9]{32}$/, '');
+  assert.notEqual(legacyKey, bound.key);
+
+  fake.store.clear();
+  fake.seed({ ...bound, key: legacyKey, bookmark: undefined });
+  clearSuspendDataFromLms(lms);
+  lms.model.delete('cmi.core.lesson_location');
+
+  assert.deepEqual(await openController().restore(), { state: null, source: null, savedAt: 0, notice: null });
+
+  // A legacy reference without a binding cannot find the tokenless record.
+  lms.model.set(SUSPEND_DATA, encodeSessionReference({ activityId: ACTIVITY_ID, savedAt: bound.savedAt }));
+  const lost = await openController().restore();
+  assert.equal(lost.state, null);
+  assert.match(lost.notice, /no longer has the saved copy/);
+
+  // A legacy portable payload still restores from the LMS.
+  const portable = sceneState(3);
+  lms.model.set(SUSPEND_DATA, encodeSessionState({
+    activityId: ACTIVITY_ID,
+    state: portable,
+    savedAt: 999,
+    limit: SPEC_LIMIT,
+  }));
+  const restored = await openController().restore();
+  assert.equal(restored.source, 'suspend_data');
+  assert.equal(restored.notice, null);
+  assert.deepEqual(restored.state, portable);
+});
+
+test('a bookmark the LMS refuses degrades to a portable save, never a browser-only success', async (t) => {
+  const { lms, fake, controller, warnings } = startSession(t, {
+    indexedDb: true,
+    lms: { rejectKeys: ['cmi.core.lesson_location'] },
+  });
+  const small = sceneState(1);
+  assert.equal(await controller.persist(small), 'suspend_data');
+  assert.equal(fake.store.size, 0, 'an unreachable browser copy is never written');
+  assert.deepEqual(storedState(lms).state, small);
+  assert.deepEqual(warnings, []);
+
+  // Something only the browser layer could hold reports the honest consequence.
+  assert.equal(await controller.persist(hugeState()), 'none');
+  assert.deepEqual(warnings, ['Your scene is too large to save, so it will not be restored next session.']);
+  assert.equal(fake.store.size, 0);
+});
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+test('cleanup expires stale records everywhere but keeps this student’s fresh save', async (t) => {
+  const { fake, controller } = startSession(t, { indexedDb: true });
+  const now = Date.now();
+  fake.seed({
+    key: 'legacy-tokenless',
+    activityId: ACTIVITY_ID,
+    studentId: STUDENT_ID,
+    savedAt: now - 181 * DAY_MS,
+    suspendLimit: SPEC_LIMIT,
+    state: sceneState(1),
+  });
+  fake.seed({
+    key: 'other-student-recent',
+    activityId: ACTIVITY_ID,
+    studentId: 'student-other',
+    savedAt: now - DAY_MS,
+    suspendLimit: SPEC_LIMIT,
+    state: sceneState(2),
+  });
+  fake.seed({
+    key: 'other-activity-aged',
+    activityId: 'another-activity',
+    studentId: 'student-other',
+    savedAt: now - 200 * DAY_MS,
+    suspendLimit: SPEC_LIMIT,
+    state: sceneState(3),
+  });
+
+  assert.equal(await controller.persist(sceneState(4)), 'suspend_data');
+  await flushTasks();
+
+  assert.equal(fake.store.has('legacy-tokenless'), false);
+  assert.equal(fake.store.has('other-activity-aged'), false);
+  assert.equal(fake.store.has('other-student-recent'), true);
+  assert.ok([...fake.store.values()].some((record) => record.state.scene_bundle_base64 === 'bundle-4'));
+});
+
+test('the eight-record cap counts only this activity and student, and keeps the fresh save', async (t) => {
+  const { fake, controller } = startSession(t, { indexedDb: true });
+  const now = Date.now();
+  for (let index = 0; index < 8; index += 1) {
+    fake.seed({
+      key: `own-${index}`,
+      activityId: ACTIVITY_ID,
+      studentId: STUDENT_ID,
+      savedAt: now - 10_000 + index,
+      suspendLimit: SPEC_LIMIT,
+      state: sceneState(index),
+    });
+  }
+  fake.seed({
+    key: 'other-student',
+    activityId: ACTIVITY_ID,
+    studentId: 'student-other',
+    savedAt: now - 60_000,
+    suspendLimit: SPEC_LIMIT,
+    state: sceneState(99),
+  });
+
+  assert.equal(await controller.persist(sceneState(50)), 'suspend_data');
+  await flushTasks();
+
+  const mine = [...fake.store.values()]
+    .filter((record) => record.activityId === ACTIVITY_ID && record.studentId === STUDENT_ID);
+  assert.equal(mine.length, 8);
+  assert.ok(mine.some((record) => record.state.scene_bundle_base64 === 'bundle-50'));
+  assert.equal(fake.store.has('other-student'), true);
+  assert.equal(fake.store.has('own-0'), false, 'the oldest own record made room');
+});
+
+test('discard is serialised behind an in-flight save and cannot be recreated', async (t) => {
+  const { fake, controller } = startSession(t, { indexedDb: true });
+  await controller.persist(sceneState(1));
+  fake.delaysNextPut(8);
+
+  const saving = controller.persist(sceneState(2));
+  const discarding = controller.discard(sceneState(1));
+  assert.equal(controller.persistNow(sceneState(3)), 'none', 'an unload save cannot overtake the reset');
+
+  await Promise.all([saving, discarding]);
+  assert.equal(fake.store.size, 0);
+  assert.equal(await controller.persist(sceneState(1)), 'none', 'the discarded scene stays discarded');
+});
+
+test('a rejected bookmark clear still discards the browser copy', async (t) => {
+  const { lms, fake, controller, openController } = startSession(t, { indexedDb: true });
+  await controller.persist(sceneState(1));
+  const original = lms.api.LMSSetValue;
+  lms.api.LMSSetValue = (key, value) => (
+    key === 'cmi.core.lesson_location' && value === '' ? 'false' : original.call(lms.api, key, value)
+  );
+
+  await controller.discard();
+  assert.equal(fake.store.size, 0);
+
+  // The LMS still holds the bookmark, but there is nothing left to restore.
+  lms.model.set(SUSPEND_DATA, '');
+  const restored = await openController().restore();
+  assert.equal(restored.state, null);
+  assert.equal(restored.notice, null);
+});
+
+test('a reset reports failure when the LMS keeps its saved snapshot', async (t) => {
+  const { controller } = startSession(t, { indexedDb: true, lms: { rejectSuspendData: true } });
+  await controller.persist(sceneState(1));
+
+  await assert.rejects(() => controller.discard(), /could not be cleared/);
 });

@@ -10,6 +10,12 @@
  *          private windows). Used when the scene bundle does not fit in layer 1,
  *          and as a higher-fidelity copy otherwise.
  *
+ * Layer 2 is bound to one LMS attempt through the standard bookmark
+ * `cmi.core.lesson_location` (`swarm-scene-v1:<32 hex>`). Moodle loads both
+ * `cmi.suspend_data` and the bookmark per SCO, student and current attempt, so
+ * a browser record is only restored by the attempt that wrote it. An attempt
+ * that starts `ab-initio` never reads (or attaches) an earlier attempt's data.
+ *
  * suspend_data keeps the last snapshot that fits, so a student returning on
  * another device still gets a (possibly older) complete scene. When it has
  * never held a full snapshot, it receives a small reference payload instead so
@@ -32,9 +38,13 @@ const STORE_NAME = 'session_state';
 const RECORD_TTL_MS = 180 * 24 * 60 * 60 * 1000;
 const MAX_RECORDS_PER_ACTIVITY = 8;
 const INDEXED_DB_OPEN_TIMEOUT_MS = 2000;
+const BOOKMARK_PREFIX = 'swarm-scene-v1:';
 
 /**
  * Create a persistence controller for one activity session.
+ *
+ * The controller reads the LMS entry mode when it is created, so call it after
+ * `scorm.init()`.
  * @param {{
  *   activityId?: string,
  *   studentId?: string,
@@ -48,8 +58,11 @@ export function createSessionPersistence({
   limit = SUSPEND_DATA_MAX_LENGTH,
   onWarning = () => {},
 } = {}) {
-  const recordKey = buildRecordKey(activityId, studentId);
   const configuredLimit = normalizeLimit(limit);
+  const startsFresh = scorm.getEntry() === 'ab-initio';
+  // Read once: a Moodle attempt is identified by the path the package is
+  // served from, and the page can change its location later in the session.
+  const locationHash = hashLocation();
 
   let effectiveLimit = configuredLimit;
   let persistedPayload = null;
@@ -61,6 +74,14 @@ export function createSessionPersistence({
   let hasWarnedAboutSize = false;
   let dbPromise = null;
   let queue = Promise.resolve();
+  let discarding = false;
+
+  // Binding for this attempt: the bookmark this package owns, the key derived
+  // from it, and whether the LMS holds someone else's non-empty bookmark.
+  let boundBookmark = '';
+  let recordKey = null;
+  let foreignBookmark = false;
+  applyLaunchBookmark();
 
   /**
    * Restore the newest complete snapshot from either layer.
@@ -72,9 +93,28 @@ export function createSessionPersistence({
    * }>}
    */
   async function restore() {
+    if (startsFresh) {
+      // Moodle starts every new attempt with empty track fields, but a reload
+      // of the same fresh attempt would otherwise reattach whatever the LMS
+      // still shows. Clear only data this package recognises as its own.
+      const leftover = scorm.getSuspendData();
+      if (decodeSessionPayload({ payload: leftover, activityId })) {
+        scorm.clearSuspendData();
+      }
+      if (scorm.isSceneBookmark(scorm.getSceneBookmark())) {
+        scorm.setSceneBookmark('');
+      }
+      boundBookmark = '';
+      recordKey = null;
+      return { state: null, source: null, savedAt: 0, notice: null };
+    }
+
     const storedPayload = scorm.getSuspendData();
     const decoded = decodeSessionPayload({ payload: storedPayload, activityId });
-    const record = await readRecord();
+    applyLaunchBookmark();
+
+    // Layer 2 is reachable only through a bookmark this package wrote.
+    const record = boundBookmark ? await readRecord() : null;
 
     persistedPayload = decoded ? storedPayload : null;
     suspendDataHasState = decoded?.kind === 'state';
@@ -132,6 +172,9 @@ export function createSessionPersistence({
    * @returns {'suspend_data'|'indexeddb'|'none'}
    */
   function persistNow(state) {
+    // A reset is clearing this attempt; letting an unload save recreate it
+    // would resurrect the discarded scene.
+    if (discarding) return 'none';
     if (!scorm.isSessionActive()) return 'none';
 
     const fingerprint = fingerprintOf(state);
@@ -169,16 +212,41 @@ export function createSessionPersistence({
   /**
    * Drop both stored layers. The supplied state becomes the new baseline, so
    * scene change events fired after a reset do not write it straight back.
+   * A pending queued save cannot recreate the discarded state.
    * @param {object} [state] - Scene state to treat as already persisted
    * @returns {Promise<void>}
    */
-  async function discard(state) {
-    scorm.clearSuspendData();
+  function discard(state) {
+    discarding = true;
+    const run = () => discardState(state).finally(() => {
+      discarding = false;
+    });
+    queue = queue.then(run, run);
+    return queue;
+  }
+
+  async function discardState(state) {
+    const sessionActive = scorm.isSessionActive();
+    const snapshotCleared = !sessionActive || scorm.clearSuspendData();
+    let bookmarkCleared = true;
+    if (sessionActive && boundBookmark !== '') {
+      bookmarkCleared = scorm.setSceneBookmark('');
+    }
+    const deleted = await deleteRecord();
+
     persistedPayload = null;
     suspendDataHasState = false;
     indexedDbSavedAt = 0;
+    effectiveLimit = configuredLimit;
+    boundBookmark = '';
+    recordKey = null;
     lastPersistedFingerprint = state ? fingerprintOf(state) : null;
-    await deleteRecord();
+
+    // An untouched local record still prevents a restore, so a rejected
+    // bookmark clear only matters when the delete failed too.
+    if (!snapshotCleared || (!bookmarkCleared && !deleted)) {
+      throw new Error('the saved scene could not be cleared');
+    }
   }
 
   async function persistState(state) {
@@ -284,7 +352,16 @@ export function createSessionPersistence({
     );
   }
 
+  /** Adopt the bookmark the LMS returned for this attempt, if it is ours. */
+  function applyLaunchBookmark() {
+    const value = scorm.getSceneBookmark();
+    foreignBookmark = value !== '' && !scorm.isSceneBookmark(value);
+    boundBookmark = scorm.isSceneBookmark(value) ? value : '';
+    recordKey = boundBookmark ? buildRecordKey(activityId, studentId, locationHash, boundBookmark) : null;
+  }
+
   async function readRecord() {
+    if (!recordKey) return null;
     const db = await openDatabase();
     if (!db) return null;
 
@@ -294,6 +371,7 @@ export function createSessionPersistence({
         .get(recordKey));
       if (!record) return null;
       if (record.activityId !== activityId || record.studentId !== studentId) return null;
+      if (record.bookmark !== boundBookmark) return null;
       if (!isUsableSessionState(record.state)) return null;
       return {
         state: record.state,
@@ -308,12 +386,24 @@ export function createSessionPersistence({
   }
 
   async function writeRecord(state, savedAt) {
-    if (!indexedDbSupported) return false;
+    if (!indexedDbSupported || studentId === '' || foreignBookmark) return false;
 
     const db = await openDatabase();
     if (!db) return false;
 
-    const record = { key: recordKey, activityId, studentId, savedAt, suspendLimit: effectiveLimit, state };
+    // The first browser save of an attempt allocates its binding. Until this
+    // succeeds there is no reachable record to write.
+    if (!boundBookmark && !bindBookmark()) return false;
+
+    const record = {
+      key: recordKey,
+      activityId,
+      studentId,
+      bookmark: boundBookmark,
+      savedAt,
+      suspendLimit: effectiveLimit,
+      state,
+    };
     try {
       await putRecord(db, record);
       indexedDbSavedAt = savedAt;
@@ -323,6 +413,22 @@ export function createSessionPersistence({
       console.warn('[SessionPersistence] Could not store IndexedDB state:', err.message);
       return false;
     }
+  }
+
+  /** Allocate the attempt token and prove the LMS stored it verbatim. */
+  function bindBookmark() {
+    const cryptoApi = globalThis.crypto;
+    if (typeof cryptoApi?.getRandomValues !== 'function') return false;
+
+    const bytes = new Uint8Array(16);
+    cryptoApi.getRandomValues(bytes);
+    const value = `${BOOKMARK_PREFIX}${Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+    if (!scorm.setSceneBookmark(value)) return false;
+    if (scorm.getSceneBookmark() !== value) return false;
+
+    boundBookmark = value;
+    recordKey = buildRecordKey(activityId, studentId, locationHash, value);
+    return true;
   }
 
   async function putRecord(db, record) {
@@ -337,15 +443,17 @@ export function createSessionPersistence({
   }
 
   async function deleteRecord() {
-    if (!indexedDbSupported) return;
+    if (!indexedDbSupported || !recordKey) return false;
 
     const db = await openDatabase();
-    if (!db) return;
+    if (!db) return false;
 
     try {
       await runRequest(db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(recordKey));
+      return true;
     } catch (err) {
       console.warn('[SessionPersistence] Could not clear IndexedDB state:', err.message);
+      return false;
     }
   }
 
@@ -361,12 +469,14 @@ export function createSessionPersistence({
   async function pruneOldRecords(db, now) {
     const records = await runRequest(db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).getAll());
     const mine = records
-      .filter((record) => record.activityId === activityId)
+      .filter((record) => record.activityId === activityId && record.studentId === studentId)
       .sort((a, b) => (Number(b.savedAt) || 0) - (Number(a.savedAt) || 0));
 
     const doomed = records
-      .filter((record) => record.activityId !== activityId && now - (Number(record.savedAt) || 0) > RECORD_TTL_MS)
-      .concat(mine.slice(MAX_RECORDS_PER_ACTIVITY));
+      // Expire stale records everywhere, including tokenless legacy keys.
+      .filter((record) => record.key !== recordKey && now - (Number(record.savedAt) || 0) > RECORD_TTL_MS)
+      // The per-attempt cap is per activity and student, never per attempt.
+      .concat(mine.slice(MAX_RECORDS_PER_ACTIVITY).filter((record) => record.key !== recordKey));
 
     await Promise.all(doomed.map((record) => runRequest(
       db.transaction(STORE_NAME, 'readwrite').objectStore(STORE_NAME).delete(record.key),
@@ -435,8 +545,8 @@ function runRequest(request) {
   });
 }
 
-function buildRecordKey(activityId, studentId) {
-  return `${activityId}::${studentId}::${hashLocation()}`;
+function buildRecordKey(activityId, studentId, locationHash, bookmark) {
+  return `${activityId}::${studentId}::${locationHash}::${bookmark}`;
 }
 
 /**

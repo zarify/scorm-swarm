@@ -19,6 +19,12 @@
  */
 const COMMIT_MIN_INTERVAL_MS = 10000;
 
+/**
+ * Shape of the standard SCORM bookmark (`cmi.core.lesson_location`) this
+ * package uses to bind a browser-side copy of a scene to one LMS attempt.
+ */
+const SCENE_BOOKMARK_PATTERN = /^swarm-scene-v1:[a-f0-9]{32}$/;
+
 let api = null;
 let initialized = false;
 let previewMode = false;
@@ -260,6 +266,67 @@ export function getSuspendData() {
 }
 
 /**
+ * Read the LMS entry mode for this launch. Moodle reports `ab-initio` for an
+ * attempt that has not started, and a resumed attempt may report anything.
+ * @returns {string} Empty string when disconnected
+ */
+export function getEntry() {
+  if (!isConnected()) return '';
+
+  const value = api.LMSGetValue('cmi.core.entry');
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Read the raw `cmi.core.lesson_location` bookmark.
+ * @returns {string} Empty string when nothing is stored or no LMS is connected
+ */
+export function getSceneBookmark() {
+  if (!isConnected()) return '';
+
+  const value = api.LMSGetValue('cmi.core.lesson_location');
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Whether a value is a bookmark this package wrote, as opposed to another
+ * tool's or a previous version's bookmark.
+ * @param {unknown} value
+ * @returns {boolean}
+ */
+export function isSceneBookmark(value) {
+  return typeof value === 'string' && SCENE_BOOKMARK_PATTERN.test(value);
+}
+
+/**
+ * Store the browser-save binding in the standard SCORM bookmark. An empty
+ * value clears it. The write is coalesced like other background writes.
+ * @param {string} value - a valid Swarm bookmark or ''
+ * @returns {boolean} true when the LMS stored the exact value
+ */
+export function setSceneBookmark(value) {
+  if (!isConnected()) return false;
+  if (value !== '' && !isSceneBookmark(value)) return false;
+
+  const result = api.LMSSetValue('cmi.core.lesson_location', value);
+  const accepted = result === 'true' || result === true;
+  if (!accepted) {
+    console.warn('[SCORM] LMS rejected the scene bookmark:', api.LMSGetLastError());
+    return false;
+  }
+
+  const stored = api.LMSGetValue('cmi.core.lesson_location');
+  if (stored !== value) {
+    console.warn('[SCORM] LMS did not store the scene bookmark verbatim.');
+    return false;
+  }
+
+  hasUncommittedWrites = true;
+  commit();
+  return true;
+}
+
+/**
  * Store suspend data for the next session.
  * The value is visible to the LMS immediately; the server write is coalesced
  * so that editing does not commit on every pause.
@@ -310,6 +377,13 @@ export function terminate() {
   if (previewMode) {
     console.log('[SCORM Preview] Session terminated');
     return;
+  }
+
+  // Standard SCORM players keep this attempt's suspend_data and bookmark only
+  // when the exit reason says the attempt can be resumed.
+  if (getSuspendData() !== '' || isSceneBookmark(getSceneBookmark())) {
+    api.LMSSetValue('cmi.core.exit', 'suspend');
+    hasUncommittedWrites = true;
   }
 
   commit({ force: true });
