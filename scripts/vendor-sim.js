@@ -16,8 +16,8 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sourceOverride = process.env.SWARM_SIM_SRC;
 const simulatorRepo = 'https://github.com/zarify/swarm_sim.git';
-const simulatorTag = 'v0.16.0';
-const simulatorRevision = '971f7fbde2b17703fd53029123062ede9e5284dc';
+const simulatorTag = 'v0.16.1';
+const simulatorRevision = 'a81cc97e167545a4f6aa9d75288ffd9104cf2eb6';
 const vendorRoot = join(packageRoot, 'vendor/swarm-sim');
 const patchPath = 'sim-patch/edits.patch';
 /**

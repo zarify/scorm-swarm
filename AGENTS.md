@@ -6,7 +6,7 @@ This repository builds a browser-based activity authoring tool and SCORM 1.2 lea
 
 ## Architecture & Data Flow
 
-- `scripts/vendor-sim.js` clones upstream `swarm_sim` tag `v0.16.0` by default, overlays `sim-patch/src/`, applies `sim-patch/edits.patch`, builds it, and places assets in `dist/sim/`. Set `SWARM_SIM_SRC` to use a local committed checkout.
+- `scripts/vendor-sim.js` clones upstream `swarm_sim` tag `v0.16.1` by default, overlays `sim-patch/src/`, applies `sim-patch/edits.patch`, builds it, and places assets in `dist/sim/`. Set `SWARM_SIM_SRC` to use a local committed checkout.
 - `scripts/build.js` normalizes and validates activity configuration and scene bundles, bundles builder and learner browser entry points with esbuild, and assembles `dist/` output. The SCORM target needs simulator assets first.
 - `src/activity-builder/` authors configuration and scenarios; browser-side export packages config, manifest, template, and simulator assets.
 - `src/scorm-template/` loads the activity and simulator in an iframe. `src/shared/sim-bridge.js` owns the versioned, origin/source-checked `postMessage` protocol. Simulator events feed `test-runner.js`, `effect-evaluator.js`, and `hint-evaluator.js`.

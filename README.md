@@ -23,7 +23,7 @@ npm run build
 npm run dev
 ```
 
-`npm run vendor:sim` fetches the public [`swarm_sim`](https://github.com/zarify/swarm_sim) project at `v0.16.0`, applies this repository's simulator patches, and builds the simulator locally. The generated `vendor/` and `dist/` directories are gitignored; no sibling checkout or machine-specific path is needed. To use a local simulator checkout while developing, set `SWARM_SIM_SRC` to its path.
+`npm run vendor:sim` fetches the public [`swarm_sim`](https://github.com/zarify/swarm_sim) project at `v0.16.1`, applies this repository's simulator patches, and builds the simulator locally. The generated `vendor/` and `dist/` directories are gitignored; no sibling checkout or machine-specific path is needed. To use a local simulator checkout while developing, set `SWARM_SIM_SRC` to its path.
 
 To create a SCORM ZIP from a built package:
 
@@ -47,7 +47,7 @@ The learner activity runs in the browser and communicates with the simulator emb
 The authoring tool's own version is the `version` field in `package.json` (semver,
 shown as `vX.Y.Z` in the builder header next to the title). `scripts/build.js`
 injects it into the builder bundle at build time. It is independent of the sibling
-tools' versions and of the vendored simulator version (`v0.16.0`, pinned by
+tools' versions and of the vendored simulator version (`v0.16.1`, pinned by
 `scripts/vendor-sim.js`); shared fixes are ported as separate commits, never
 version-synced.
 
