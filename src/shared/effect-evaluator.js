@@ -234,7 +234,7 @@ function matchesPayload(dataBase64, payloadCondition) {
   }
   let text;
   try {
-    text = textDecoder.decode(bytes);
+    text = textDecoder.decode(stripMicroPythonStringTag(bytes));
   } catch {
     return false;
   }
@@ -244,6 +244,19 @@ function matchesPayload(dataBase64, payloadCondition) {
     payloadCondition.value,
     payloadCondition.case_sensitive ?? true,
   );
+}
+
+/**
+ * A MicroPython program sends text tagged with the firmware's 3-byte string
+ * header (`radio.send(str)`); conditions describe the text, not the wire
+ * encoding. Binary payloads that merely start with those bytes keep the same
+ * treatment the simulator's own text decode applies.
+ */
+function stripMicroPythonStringTag(bytes) {
+  if (bytes[0] !== 0x01 || bytes[1] !== 0x00 || bytes[2] !== 0x01) {
+    return bytes;
+  }
+  return bytes.subarray(3);
 }
 
 function matchText(actual, mode, expected, caseSensitive) {

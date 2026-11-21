@@ -40,6 +40,32 @@ test('radio reception filters sender, channel, group, RSSI, and raw payload hex'
   assert.equal(evaluateCondition({ type: 'radio_rx', device_id: null, payload: { match: 'hex', value: '6e6f' } }, events).passed, false);
 });
 
+test('radio text conditions ignore the MicroPython string header but hex keeps the wire bytes', () => {
+  const tagged = Buffer.concat([Buffer.from([0x01, 0x00, 0x01]), Buffer.from('ack')]).toString('base64');
+  const events = [envelope(1, 1000, {
+    kind: 'radio-tx',
+    device_id: 'device-1',
+    packet: { data_b64: tagged, group: 42, channel: 10, signal_strength: null },
+  })];
+
+  assert.equal(
+    evaluateCondition({ type: 'radio_tx', device_id: 'device-1', payload: { match: 'exact', value: 'ack' } }, events).passed,
+    true,
+  );
+  assert.equal(
+    evaluateCondition({ type: 'radio_tx', payload: { match: 'contains', value: 'ack' } }, events).passed,
+    true,
+  );
+  assert.equal(
+    evaluateCondition({ type: 'radio_tx', payload: { match: 'exact', value: '\u0001\u0000\u0001ack' } }, events).passed,
+    false,
+  );
+  assert.equal(
+    evaluateCondition({ type: 'radio_tx', payload: { match: 'hex', value: '01000161636b' } }, events).passed,
+    true,
+  );
+});
+
 test('button AB presses count, while identical transitions inside 150 ms are deduplicated', () => {
   const grader = createGrader();
   assert.equal(grader.record(envelope(1, 1000, { kind: 'button', device_id: 'alice', button: 'AB', pressed: true })), true);

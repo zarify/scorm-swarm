@@ -261,7 +261,7 @@ index 562b1eb..9c4126a 100644
    );
  
 diff --git a/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx b/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
-index a523b5f..fc67160 100644
+index a523b5f..4aa14db 100644
 --- a/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
 +++ b/vendor/swarm-sim/src/components/SwarmCanvasPanel.test.tsx
 @@ -1,8 +1,11 @@
@@ -277,7 +277,15 @@ index a523b5f..fc67160 100644
  const workingCopyStorageState = vi.hoisted(() => ({
    items: new Map<string, string>(),
    loadErrorMessage: undefined as string | undefined,
-@@ -57,7 +60,73 @@ import {
+@@ -47,6 +50,7 @@ vi.mock('../domain/browserWorkingCopyStore', async () => {
+ import {
+   SwarmCanvasPanel,
+   shouldGuardGlobalFileDrop,
++  encodeScriptedRadioPayloadForRecipient,
+   translateRuntimeRadioPacketForRecipient,
+ } from './SwarmCanvasPanel';
+ import { createBlankProject, type SwarmProject } from '../domain/project';
+@@ -57,7 +61,73 @@ import {
    encodeMicroPythonRadioString,
  } from '../runtime/micropythonIframeAdapter';
  
@@ -351,7 +359,7 @@ index a523b5f..fc67160 100644
    beforeEach(() => {
      if (typeof window.localStorage?.clear === 'function') {
        window.localStorage.clear();
-@@ -81,6 +150,33 @@ describe('SwarmCanvasPanel', () => {
+@@ -81,6 +151,33 @@ describe('SwarmCanvasPanel', () => {
      return screen.getAllByRole('button', { name: /^Reset$/ })[0]!;
    }
  
@@ -385,7 +393,7 @@ index a523b5f..fc67160 100644
    function addDeviceFromSwarmTools() {
      openSwarmTools();
      fireEvent.click(screen.getByRole('button', { name: 'Add device' }));
-@@ -109,8 +205,10 @@ describe('SwarmCanvasPanel', () => {
+@@ -109,8 +206,10 @@ describe('SwarmCanvasPanel', () => {
      setAddLockedMode(false);
    }
  
@@ -398,7 +406,7 @@ index a523b5f..fc67160 100644
        configurable: true,
        value: () => ({
          x: 0,
-@@ -151,6 +249,131 @@ describe('SwarmCanvasPanel', () => {
+@@ -151,6 +250,131 @@ describe('SwarmCanvasPanel', () => {
      expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
    });
  
@@ -530,7 +538,7 @@ index a523b5f..fc67160 100644
    it('uses compact glyph controls with tooltips in the header and canvas-state menu', () => {
      render(<SwarmCanvasPanel />);
  
-@@ -258,8 +481,10 @@ describe('SwarmCanvasPanel', () => {
+@@ -258,8 +482,10 @@ describe('SwarmCanvasPanel', () => {
      addLockedDeviceFromSwarmTools();
  
      expect(container.querySelectorAll('.microbit-node')).toHaveLength(2);
@@ -543,7 +551,7 @@ index a523b5f..fc67160 100644
    });
  
    it('supports toggleable pinning for regular devices and permanent pinning for locked devices', () => {
-@@ -281,23 +506,15 @@ describe('SwarmCanvasPanel', () => {
+@@ -281,23 +507,15 @@ describe('SwarmCanvasPanel', () => {
  
      expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
      expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
@@ -571,7 +579,7 @@ index a523b5f..fc67160 100644
      if (!FEATURE_FLAGS.light) {
        return;
      }
-@@ -309,8 +526,9 @@ describe('SwarmCanvasPanel', () => {
+@@ -309,8 +527,9 @@ describe('SwarmCanvasPanel', () => {
      setAddLockedMode(false);
  
      expect(container.querySelectorAll('.source-node--light')).toHaveLength(1);
@@ -583,7 +591,7 @@ index a523b5f..fc67160 100644
      expect(screen.getByLabelText('Radius')).toBeEnabled();
      expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeEnabled();
      expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeEnabled();
-@@ -321,24 +539,9 @@ describe('SwarmCanvasPanel', () => {
+@@ -321,24 +540,9 @@ describe('SwarmCanvasPanel', () => {
      expect(screen.getByLabelText('Radius')).toBeDisabled();
      expect(screen.getByLabelText('Peak level (micro:bit scale)')).toBeDisabled();
      expect(screen.getByRole('button', { name: 'Rename selected node' })).toBeDisabled();
@@ -611,7 +619,7 @@ index a523b5f..fc67160 100644
    });
  
    it('shows temperature source controls and device temperature readings', () => {
-@@ -493,8 +696,11 @@ describe('SwarmCanvasPanel', () => {
+@@ -493,8 +697,11 @@ describe('SwarmCanvasPanel', () => {
      expect(screen.queryByText('Runtime group')).not.toBeInTheDocument();
      expect(screen.queryByText('Runtime channel')).not.toBeInTheDocument();
      expect(screen.queryByText('Not exposed')).not.toBeInTheDocument();
@@ -625,7 +633,7 @@ index a523b5f..fc67160 100644
    });
  
    it('assigns uploaded code to the selected device without showing MicroPython host chrome', async () => {
-@@ -505,10 +711,11 @@ describe('SwarmCanvasPanel', () => {
+@@ -505,10 +712,11 @@ describe('SwarmCanvasPanel', () => {
        target: { files: [file] },
      });
  
@@ -639,7 +647,7 @@ index a523b5f..fc67160 100644
      expect(screen.getAllByRole('button', { name: /^Reset$/ })[0]!).toBeEnabled();
    });
  
-@@ -520,9 +727,12 @@ describe('SwarmCanvasPanel', () => {
+@@ -520,9 +728,12 @@ describe('SwarmCanvasPanel', () => {
        target: { files: [file] },
      });
  
@@ -653,7 +661,7 @@ index a523b5f..fc67160 100644
      expect(screen.queryByLabelText('MicroPython runtime host')).not.toBeInTheDocument();
      expect(screen.queryByLabelText('MakeCode simulator for Node 1')).not.toBeInTheDocument();
      expect(screen.queryByText(/Unable to identify this HEX/)).not.toBeInTheDocument();
-@@ -547,7 +757,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -547,7 +758,7 @@ describe('SwarmCanvasPanel', () => {
      await waitFor(() =>
        expect(screen.queryByRole('dialog', { name: 'Code editor for Node 1' })).not.toBeInTheDocument(),
      );
@@ -662,7 +670,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
      expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("edited")\n');
-@@ -573,7 +783,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -573,7 +784,7 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
        target: { files: [sharedFile] },
      });
@@ -671,7 +679,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[0]!, {
        button: 0,
-@@ -584,7 +794,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -584,7 +795,7 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [sharedFile] },
      });
@@ -680,7 +688,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.pointerDown(container.querySelectorAll('.microbit-node')[1]!, {
        button: 0,
-@@ -610,6 +820,100 @@ describe('SwarmCanvasPanel', () => {
+@@ -610,6 +821,100 @@ describe('SwarmCanvasPanel', () => {
      expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("shared")');
    });
  
@@ -781,7 +789,7 @@ index a523b5f..fc67160 100644
    it('rejects unextractable HEX uploads', async () => {
      render(<SwarmCanvasPanel />);
  
-@@ -623,10 +927,8 @@ describe('SwarmCanvasPanel', () => {
+@@ -623,10 +928,8 @@ describe('SwarmCanvasPanel', () => {
          screen.getByText('No embedded MicroPython or MakeCode source found in HEX artifact'),
        ).toBeInTheDocument(),
      );
@@ -794,7 +802,7 @@ index a523b5f..fc67160 100644
    });
  
    it('keeps the latest selected-device upload when an older read finishes later', async () => {
-@@ -639,38 +941,68 @@ describe('SwarmCanvasPanel', () => {
+@@ -639,38 +942,68 @@ describe('SwarmCanvasPanel', () => {
        target: { files: [makeUploadFile('fast.hex', makeMicroPythonHex('radio.send("fast")'))] },
      });
  
@@ -874,7 +882,7 @@ index a523b5f..fc67160 100644
      confirmSpy.mockRestore();
    });
  
-@@ -682,26 +1014,26 @@ describe('SwarmCanvasPanel', () => {
+@@ -682,26 +1015,26 @@ describe('SwarmCanvasPanel', () => {
        target: { files: [makeUploadFile('mystery.hex', makeMicroPythonHex('radio.send("mystery")'))] },
      });
  
@@ -911,7 +919,7 @@ index a523b5f..fc67160 100644
        dataTransfer: {
          files: [makeUploadFile('second.hex', makeMicroPythonHex('radio.send("two")'))],
          types: ['Files'],
-@@ -711,20 +1043,55 @@ describe('SwarmCanvasPanel', () => {
+@@ -711,20 +1044,55 @@ describe('SwarmCanvasPanel', () => {
      await waitFor(() =>
        expect(screen.getByText('Node 2 is locked after its first successful code upload.')).toBeInTheDocument(),
      );
@@ -971,7 +979,7 @@ index a523b5f..fc67160 100644
  
      const regularNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
      fireEvent.click(screen.getByRole('button', { name: 'Pin device position' }));
-@@ -752,7 +1119,9 @@ describe('SwarmCanvasPanel', () => {
+@@ -752,7 +1120,9 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.pointerUp(canvas, { pointerId: 3, clientX: 160, clientY: 160 });
  
      expect(screen.getByRole('button', { name: 'Pinned device position permanently' })).toBeDisabled();
@@ -982,7 +990,7 @@ index a523b5f..fc67160 100644
      expect(
        screen.queryByText('This device is locked in place on the canvas and cannot be moved, renamed, or unlocked.'),
      ).not.toBeInTheDocument();
-@@ -775,13 +1144,13 @@ describe('SwarmCanvasPanel', () => {
+@@ -775,13 +1145,13 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
      });
@@ -998,7 +1006,7 @@ index a523b5f..fc67160 100644
        timeout: 12000,
      });
  
-@@ -851,8 +1220,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -851,8 +1221,7 @@ describe('SwarmCanvasPanel', () => {
    it('logs sound start once for bursty runtime sound events', async () => {
      render(<SwarmCanvasPanel RuntimeHost={(props) => <BurstSoundEmitterHost {...props} />} />);
  
@@ -1008,7 +1016,7 @@ index a523b5f..fc67160 100644
  
      await waitFor(() =>
        expect(screen.getByText('Sound output started (level 9)')).toBeInTheDocument(),
-@@ -878,8 +1246,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -878,8 +1247,7 @@ describe('SwarmCanvasPanel', () => {
      });
      expect(screen.getByRole('img', { name: 'Draggable micro:bit swarm canvas' })).toBeInTheDocument();
  
@@ -1018,7 +1026,7 @@ index a523b5f..fc67160 100644
      const diagnostic = await screen.findByText('Ignored invalid runtime radio signal strength: -52');
      expect(diagnostic.closest('.device-log__line')?.querySelector('.device-log__type')).toHaveTextContent('err');
    });
-@@ -903,10 +1270,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -903,10 +1271,7 @@ describe('SwarmCanvasPanel', () => {
    it('shows serial output in runtime logs and renders compact radio packet previews', async () => {
      render(<SwarmCanvasPanel RuntimeHost={(props) => <SerialAndRadioEmitterHost {...props} />} />);
  
@@ -1030,7 +1038,7 @@ index a523b5f..fc67160 100644
  
      await waitFor(() => expect(screen.getAllByText('sound:13').length).toBeGreaterThanOrEqual(2));
    });
-@@ -917,8 +1281,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -917,8 +1282,7 @@ describe('SwarmCanvasPanel', () => {
      addDeviceFromSwarmTools();
      await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
  
@@ -1040,7 +1048,7 @@ index a523b5f..fc67160 100644
  
      await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
      expect(screen.queryByText('Blocked radio packet from Node 1: group-mismatch')).not.toBeInTheDocument();
-@@ -935,8 +1298,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -935,8 +1299,7 @@ describe('SwarmCanvasPanel', () => {
      addDeviceFromSwarmTools();
      await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
  
@@ -1050,7 +1058,7 @@ index a523b5f..fc67160 100644
  
      await waitFor(() => expect(screen.getByText('Received radio packet from sensors')).toBeInTheDocument());
    });
-@@ -952,10 +1314,9 @@ describe('SwarmCanvasPanel', () => {
+@@ -952,10 +1315,9 @@ describe('SwarmCanvasPanel', () => {
      addDeviceFromSwarmTools();
      await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
  
@@ -1063,7 +1071,7 @@ index a523b5f..fc67160 100644
    });
  
    it('redacts radio inspector payloads when the sender is a locked device', async () => {
-@@ -965,21 +1326,261 @@ describe('SwarmCanvasPanel', () => {
+@@ -965,21 +1327,261 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 2/), {
        target: { files: [makeUploadFile('locked.hex', makeMicroPythonHex('radio.send("hidden")'))] },
      });
@@ -1330,7 +1338,7 @@ index a523b5f..fc67160 100644
    it('uses autogenerated fallback names and keeps radio identity keyed by device id', async () => {
      render(<SwarmCanvasPanel RuntimeHost={(props) => <RadioConfigThenPacketHost {...props} />} />);
  
-@@ -997,8 +1598,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -997,8 +1599,7 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(renameInput, { target: { value: 'Alpha' } });
      fireEvent.keyDown(renameInput, { key: 'Enter' });
  
@@ -1340,7 +1348,7 @@ index a523b5f..fc67160 100644
  
      await waitFor(() => expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument());
    });
-@@ -1009,8 +1609,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1009,8 +1610,7 @@ describe('SwarmCanvasPanel', () => {
      addDeviceFromSwarmTools();
      await waitFor(() => expect(screen.getAllByText('Node 2').length).toBeGreaterThan(0));
  
@@ -1350,7 +1358,32 @@ index a523b5f..fc67160 100644
  
      await waitFor(() =>
        expect(screen.getByText('Received radio packet from Node 1')).toBeInTheDocument(),
-@@ -1104,17 +1703,15 @@ describe('SwarmCanvasPanel', () => {
+@@ -1018,6 +1618,24 @@ describe('SwarmCanvasPanel', () => {
+     expect(screen.getAllByText('Received radio packet from Node 1')).toHaveLength(1);
+   });
+ 
++  it('tags scripted radio text for MicroPython recipients only', async () => {
++    const text = new TextEncoder().encode('ping');
++
++    const forMicroPython = encodeScriptedRadioPayloadForRecipient({ data: text }, 'micropython');
++    expect([...forMicroPython.data]).toEqual([0x01, 0x00, 0x01, ...text]);
++    expect(decodeMicroPythonRadioString(forMicroPython.data)).toBe('ping');
++
++    const forMakeCode = encodeScriptedRadioPayloadForRecipient({ data: text }, 'makecode-pxt');
++    expect([...forMakeCode.data]).toEqual([...text]);
++
++    const forUnknown = encodeScriptedRadioPayloadForRecipient({ data: text }, 'unknown');
++    expect([...forUnknown.data]).toEqual([...text]);
++
++    const alreadyTagged = encodeMicroPythonRadioString('ack');
++    const passThrough = encodeScriptedRadioPayloadForRecipient({ data: alreadyTagged }, 'micropython');
++    expect([...passThrough.data]).toEqual([...alreadyTagged]);
++  });
++
+   it('translates MakeCode packets into simplified MicroPython byte payloads', async () => {
+     const cases = [
+       { name: 'number packets', input: makeMakeCodeNumberPacket(123), expected: '123' },
+@@ -1104,17 +1722,15 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
      });
@@ -1371,7 +1404,7 @@ index a523b5f..fc67160 100644
      const firstDelivery = deliveredPackets.at(-1)?.[0];
      expect(firstDelivery?.recipientId).toBe('device-2');
      expect(firstDelivery?.packet.group).toBe(42);
-@@ -1127,8 +1724,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1127,8 +1743,7 @@ describe('SwarmCanvasPanel', () => {
      const canvas = container.querySelector('.swarm-canvas') as SVGElement;
      Object.defineProperty(canvas, 'setPointerCapture', { value: vi.fn(), configurable: true });
      fireEvent.pointerDown(alphaNode as Element);
@@ -1381,7 +1414,7 @@ index a523b5f..fc67160 100644
      await waitFor(() => expect(screen.getByText('Sent radio packet to 1 recipient(s)')).toBeInTheDocument());
      expect(
        screen.queryByText(/Translated MicroPython radio payload for MakeCode recipient:/i),
-@@ -1143,17 +1739,18 @@ describe('SwarmCanvasPanel', () => {
+@@ -1143,17 +1758,18 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
      });
@@ -1402,7 +1435,7 @@ index a523b5f..fc67160 100644
    });
  
    it('falls back to a runtime-only reset when loading the saved canvas fails', async () => {
-@@ -1164,7 +1761,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1164,7 +1780,7 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
      });
@@ -1411,7 +1444,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.click(getSaveCanvasButton());
      await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
-@@ -1316,7 +1913,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1316,7 +1932,7 @@ describe('SwarmCanvasPanel', () => {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("persist")'))] },
      });
  
@@ -1420,7 +1453,7 @@ index a523b5f..fc67160 100644
      fireEvent.click(getSaveCanvasButton());
  
      await waitFor(() =>
-@@ -1341,7 +1938,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1341,7 +1957,7 @@ describe('SwarmCanvasPanel', () => {
      const { container } = render(<SwarmCanvasPanel />);
      const canvas = container.querySelector('.swarm-canvas') as SVGElement;
      const firstNode = container.querySelectorAll('.microbit-node')[0] as SVGGElement;
@@ -1429,7 +1462,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.click(getSaveCanvasButton());
      await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
-@@ -1388,7 +1985,7 @@ describe('SwarmCanvasPanel', () => {
+@@ -1388,7 +2004,7 @@ describe('SwarmCanvasPanel', () => {
      fireEvent.change(screen.getByLabelText(/Load code onto Node 1/), {
        target: { files: [makeUploadFile('mp.hex', makeMicroPythonHex('radio.send("ping")'))] },
      });
@@ -1438,7 +1471,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.click(getSaveCanvasButton());
      await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
-@@ -1398,7 +1995,12 @@ describe('SwarmCanvasPanel', () => {
+@@ -1398,7 +2014,12 @@ describe('SwarmCanvasPanel', () => {
        target: { value: 'radio.send("edited")\n' },
      });
      fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
@@ -1452,7 +1485,7 @@ index a523b5f..fc67160 100644
  
      const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
      fireEvent.click(getHeaderResetButton());
-@@ -1406,7 +2008,6 @@ describe('SwarmCanvasPanel', () => {
+@@ -1406,7 +2027,6 @@ describe('SwarmCanvasPanel', () => {
      await waitFor(() => expect(confirmSpy).toHaveBeenCalled());
      expect(confirmSpy.mock.calls[0]?.[0]).toContain('restore saved code');
      await waitFor(() => expect(getSaveCanvasButton()).toHaveTextContent('Saved'));
@@ -1460,7 +1493,7 @@ index a523b5f..fc67160 100644
  
      fireEvent.click(screen.getByRole('button', { name: 'Edit code' }));
      expect(screen.getByLabelText('Editing main.py for Node 1')).toHaveValue('radio.send("ping")');
-@@ -1739,11 +2340,12 @@ function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonR
+@@ -1739,11 +2359,12 @@ function SerialAndRadioEmitterHost({ onRadioPacket, onRuntimeLog }: MicroPythonR
        return;
      }
      emitted.current = true;
@@ -1475,7 +1508,7 @@ index a523b5f..fc67160 100644
    }, [onRadioPacket, onRuntimeLog]);
  
    return <div aria-label="MicroPython runtime host" />;
-@@ -1930,6 +2532,68 @@ function makeSwarmBundleFile(project: SwarmProject): File {
+@@ -1930,6 +2551,68 @@ function makeSwarmBundleFile(project: SwarmProject): File {
    });
  }
  
@@ -1545,7 +1578,7 @@ index a523b5f..fc67160 100644
    const payload = new TextEncoder().encode(serializeProject(project));
    const bytes = new Uint8Array(7 + payload.length);
 diff --git a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
-index 29cd389..cc51a55 100644
+index 29cd389..531b18d 100644
 --- a/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
 +++ b/vendor/swarm-sim/src/components/SwarmCanvasPanel.tsx
 @@ -6,6 +6,8 @@ import {
@@ -1744,7 +1777,7 @@ index 29cd389..cc51a55 100644
        recentRuntimeSoundLogAt.current.clear();
        activeRuntimeSoundLevels.current.clear();
      },
-@@ -283,12 +367,298 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -283,12 +367,303 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    useEffect(() => {
      modelRef.current = model;
    }, [model]);
@@ -1815,9 +1848,14 @@ index 29cd389..cc51a55 100644
 +          ...(typeof payload.group === 'number' ? { group: payload.group } : {}),
 +        };
 +        const deliveries = handleRuntimeRadioPacket(payload.device_id, packet);
-+        await Promise.all(deliveries.map(({ recipientId, packet: deliveryPacket }) =>
-+          deliverRuntimeRadioPacket(recipientId, deliveryPacket),
-+        ));
++        const project = modelRef.current.project;
++        await Promise.all(deliveries.map(({ recipientId, packet: deliveryPacket }) => {
++          const encoded = encodeScriptedRadioPayloadForRecipient(
++            deliveryPacket,
++            resolveDeviceRuntimeSource(project, recipientId),
++          );
++          return deliverRuntimeRadioPacket(recipientId, { ...deliveryPacket, data: encoded.data });
++        }));
 +        bridge.sendAck(command.id);
 +        return;
 +      }
@@ -2043,7 +2081,7 @@ index 29cd389..cc51a55 100644
      try {
        browserProjectStore.current ??= createBrowserProjectStore();
        browserWorkingCopyStore.current ??= createBrowserWorkingCopyStore();
-@@ -337,7 +707,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -337,7 +712,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      return () => {
        cancelled = true;
      };
@@ -2052,7 +2090,7 @@ index 29cd389..cc51a55 100644
  
    useEffect(() => {
      if (!isCanvasStateMenuOpen) {
-@@ -365,7 +735,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -365,7 +740,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      function handleWindowFileDrag(event: globalThis.DragEvent) {
        if (
          shouldGuardGlobalFileDrop(event, [
@@ -2061,7 +2099,7 @@ index 29cd389..cc51a55 100644
            bundleDropAreaRef.current,
          ])
        ) {
-@@ -630,10 +1000,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -630,10 +1005,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      setSelected({ type: 'device', id });
    }
  
@@ -2074,7 +2112,7 @@ index 29cd389..cc51a55 100644
      }
      const sourceNumber = Math.max(
        nextSourceNumber.current,
-@@ -644,7 +1014,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -644,7 +1019,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      updateProject((current) => {
        nextSourceNumber.current = Math.max(
          nextSourceNumber.current,
@@ -2083,7 +2121,7 @@ index 29cd389..cc51a55 100644
        );
        const position =
          type === 'light'
-@@ -675,14 +1045,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -675,14 +1050,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                  mode: 'constant',
                  temperatureC: MICROBIT_TEMPERATURE_DEFAULT + 8,
                }
@@ -2106,7 +2144,7 @@ index 29cd389..cc51a55 100644
        return {
          ...current,
          environmentSources: [
-@@ -692,6 +1062,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -692,6 +1067,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        };
      });
      setSelected({ type: 'source', id });
@@ -2114,7 +2152,7 @@ index 29cd389..cc51a55 100644
    }
  
    function updateSource(sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) {
-@@ -751,7 +1122,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -751,7 +1127,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
    function performRuntimeOnlyReset() {
      setScenarioResetSignal((current) => current + 1);
@@ -2124,7 +2162,7 @@ index 29cd389..cc51a55 100644
      setRuntimeActivity({});
      setRuntimeErrorByDevice({});
      clearRuntimeActivityTimers(runtimeActivityTimers.current);
-@@ -811,18 +1183,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -811,18 +1188,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      }
    }
  
@@ -2145,7 +2183,7 @@ index 29cd389..cc51a55 100644
      setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
      setRuntimeActivity((current) => {
        if (!current[deviceId]) {
-@@ -855,6 +1217,97 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -855,6 +1222,97 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      clearRuntimeSoundEmitterState(deviceId);
    }
  
@@ -2243,7 +2281,7 @@ index 29cd389..cc51a55 100644
    function toggleDevicePositionPin(deviceId: DeviceId) {
      const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
      if (!device) {
-@@ -866,6 +1319,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -866,6 +1324,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      const nextPinned = !isPositionPinned(device);
      if (nextPinned) {
        releaseCanvasPointer();
@@ -2251,7 +2289,7 @@ index 29cd389..cc51a55 100644
        setDragTarget((current) =>
          current?.type === 'device' && current.id === deviceId ? null : current,
        );
-@@ -896,6 +1350,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -896,6 +1355,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      const nextPinned = !isPositionPinned(source);
      if (nextPinned) {
        releaseCanvasPointer();
@@ -2259,7 +2297,7 @@ index 29cd389..cc51a55 100644
        setDragTarget((current) =>
          current?.type === 'source' && current.id === sourceId ? null : current,
        );
-@@ -957,17 +1412,29 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -957,17 +1417,29 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      }
  
      const deletingId = selected.id;
@@ -2294,7 +2332,7 @@ index 29cd389..cc51a55 100644
        return next;
      });
    }
-@@ -1111,32 +1578,141 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1111,32 +1583,141 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      }
    }
  
@@ -2321,15 +2359,15 @@ index 29cd389..cc51a55 100644
      const device = modelRef.current.project.devices.find((candidate) => candidate.id === deviceId);
 -    if (!device || !getActiveEditableProgram(device)) {
 +    if (!device) {
-       return;
-     }
++      return;
++    }
 +    if (getActiveEditableProgram(device)) {
 +      setEditorDeviceId(deviceId);
 +      return;
 +    }
 +    if (!isBlankCodeEligible(device, artifactUploadStateRef.current[deviceId])) {
-+      return;
-+    }
+       return;
+     }
 +    runtimePickerOpenerRef.current = opener ?? null;
 +    setRuntimePickerDeviceId(deviceId);
 +  }
@@ -2446,7 +2484,7 @@ index 29cd389..cc51a55 100644
              updatedAt: now,
            },
          };
-@@ -1144,13 +1720,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1144,13 +1725,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      }));
      setEditorDeviceId(null);
      setDisplaySnapshots((current) => removeDisplaySnapshot(current, deviceId));
@@ -2461,7 +2499,7 @@ index 29cd389..cc51a55 100644
    }
  
    function handleRuntimeRadioPacket(deviceId: DeviceId, packet: RuntimeRadioPacket): RoutedRadioDelivery[] {
-@@ -1326,10 +1896,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1326,10 +1901,10 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
      const applyDisplay = () => {
        displayLastUpdateMs.current.set(deviceId, Date.now());
@@ -2476,7 +2514,7 @@ index 29cd389..cc51a55 100644
      };
  
      if (elapsed < displayMinFrameMs) {
-@@ -1621,32 +2191,44 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1621,32 +2196,44 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      buttonPulseTimers.current.set(timerKey, timeoutId);
    }
  
@@ -2537,7 +2575,7 @@ index 29cd389..cc51a55 100644
      const target = dragTarget;
      setModel((current) => {
        const nextProject = touchProjectUpdatedAt(
-@@ -1692,11 +2274,68 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1692,11 +2279,68 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      capturedPointerId.current = null;
    }
  
@@ -2606,7 +2644,7 @@ index 29cd389..cc51a55 100644
    const selectedRuntimeLoadResult = selectedDevice
      ? runtimeLoadResults.find(
          (result) =>
-@@ -1704,46 +2343,87 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1704,46 +2348,87 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
            result.artifactId === selectedDevice.programArtifactId,
        )
      : undefined;
@@ -2678,13 +2716,13 @@ index 29cd389..cc51a55 100644
 +    const targetId = hexDropTargetFor(event);
 +    setHexDropDeviceId(null);
 +    if (targetId === undefined) {
-+      return;
-+    }
-+    const target = modelRef.current.project.devices.find((device) => device.id === targetId);
-+    if (!target || !learnerCapabilitiesRef.current.load_code) {
        return;
      }
 -    const file = pickFirstHexFile(event.dataTransfer);
++    const target = modelRef.current.project.devices.find((device) => device.id === targetId);
++    if (!target || !learnerCapabilitiesRef.current.load_code) {
++      return;
++    }
 +    setSelected({ type: 'device', id: target.id });
 +    const file = pickFirstHexFile(event.dataTransfer) ?? event.dataTransfer.files[0];
      if (!file) {
@@ -2709,7 +2747,7 @@ index 29cd389..cc51a55 100644
    }
  
    function setCanvasDirtyState(nextDirtyState: boolean) {
-@@ -1773,15 +2453,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1773,15 +2458,18 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        recordCanvasUserInteraction();
      }
      releaseCanvasPointer();
@@ -2730,7 +2768,7 @@ index 29cd389..cc51a55 100644
      setRuntimeActivity({});
      setRuntimeLoadResults([]);
      setRuntimeDataLogs({});
-@@ -1796,6 +2479,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1796,6 +2484,7 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
      clearRuntimeSoundEmitterTimers(runtimeSoundEmitterTimers.current);
      clearDisplayFrameTimers(displayFrameTimers.current);
      clearButtonPulseTimers(buttonPulseTimers.current);
@@ -2738,7 +2776,7 @@ index 29cd389..cc51a55 100644
      displayLastUpdateMs.current.clear();
      const next = {
        project: nextProject,
-@@ -1985,7 +2669,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -1985,7 +2674,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
  
      try {
        const imported = await decodeProjectBundle(await readBundleFileBytes(file));
@@ -2749,7 +2787,7 @@ index 29cd389..cc51a55 100644
        setCanvasStateMessage(`Imported "${imported.name}"`);
      } catch (error) {
        setCanvasStateMessage(
-@@ -2073,43 +2759,53 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2073,43 +2764,53 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    const hasRuntimeDataLogFiles = runtimeDataLogFiles.length > 0;
  
    return (
@@ -2835,7 +2873,7 @@ index 29cd389..cc51a55 100644
            {hasCustomInstructions ? (
              <button
                type="button"
-@@ -2130,22 +2826,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2130,22 +2831,25 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
            >
              <span aria-hidden="true">↺</span> Reset
            </button>
@@ -2875,7 +2913,7 @@ index 29cd389..cc51a55 100644
          <div id="canvas-state-panel" className="canvas-state-panel" aria-label="Swarm tool controls">
            <div className="canvas-state-panel__section">
              <span className="metric-label">Swarm tools</span>
-@@ -2353,11 +3052,89 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2353,11 +3057,89 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        ) : null}
  
        <div className="swarm-layout">
@@ -2966,7 +3004,7 @@ index 29cd389..cc51a55 100644
              role="img"
              aria-label="Draggable micro:bit swarm canvas"
              onPointerMove={(event) => updateDragPosition(event.clientX, event.clientY)}
-@@ -2385,7 +3162,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2385,7 +3167,12 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                </radialGradient>
              </defs>
  
@@ -2980,7 +3018,7 @@ index 29cd389..cc51a55 100644
  
              {simulationState.radioLinks
                .filter((link) => link.canCommunicate)
-@@ -2453,13 +3235,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2453,13 +3240,14 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                  transform={`translate(${source.position.x} ${source.position.y})`}
                  onPointerDown={(event) => {
                    setSelected({ type: 'source', id: source.id });
@@ -2997,7 +3035,7 @@ index 29cd389..cc51a55 100644
                  }}
                >
                  {source.type === 'magnet' ? (
-@@ -2501,15 +3284,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2501,15 +3289,17 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                    key={device.deviceId}
                    className={`microbit-node ${isSelected ? 'microbit-node--selected' : ''}`}
                    transform={`translate(${device.position.x} ${device.position.y})`}
@@ -3017,7 +3055,7 @@ index 29cd389..cc51a55 100644
                    }}
                  >
                    <circle
-@@ -2543,6 +3328,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2543,6 +3333,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                      </g>
                    ) : null}
                    <rect className="microbit-body" x="-42" y="-30" width="84" height="60" rx="14" />
@@ -3027,7 +3065,7 @@ index 29cd389..cc51a55 100644
                    <g className="button-combo-link" data-device-button-combo-link={device.deviceId}>
  		    <path d="M-29 -2 V20 H29 V-3"/>
                    </g>
-@@ -2585,6 +3373,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2585,6 +3378,8 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
                    <text className="button-dot-label" x="29" y="18" textAnchor="middle">
                      
                    </text>
@@ -3036,10 +3074,12 @@ index 29cd389..cc51a55 100644
                    {runtimeState ? (
                      <g
                        className={`runtime-state runtime-state--${runtimeState}`}
-@@ -2618,118 +3408,168 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2616,120 +3411,170 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+                   </text>
+                 </g>
                );
-             })}
-           </svg>
+-            })}
+-          </svg>
 -        </div>
 -
 -        <aside
@@ -3053,6 +3093,8 @@ index 29cd389..cc51a55 100644
 -          {isSidebarDragActive && canDropHexToSidebar ? (
 -            <div className="swarm-sidebar-drop-overlay">
 -              Drop .hex to load onto <strong>{selectedDevice?.name}</strong>
++            })}
++          </svg>
 +          {hexDropTargetEligible && hexDropTargetDevice ? (
 +            <div className="canvas-drop-overlay">
 +              Drop .hex to load onto <strong>{hexDropTargetDevice.name}</strong>
@@ -3305,7 +3347,7 @@ index 29cd389..cc51a55 100644
          onClick={() => setIsDebugModalOpen(false)}
        >
          <div className="debug-modal__card" onClick={(event) => event.stopPropagation()}>
-@@ -2770,7 +3610,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2770,7 +3615,9 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
        {editorDevice && activeEditorProgram ? (
          <DeviceCodeEditorModal
            deviceName={editorDevice.name}
@@ -3315,7 +3357,7 @@ index 29cd389..cc51a55 100644
            onClose={() => setEditorDeviceId(null)}
            onSave={(nextProgram) => saveEditedProgram(editorDevice.id, nextProgram)}
          />
-@@ -2779,21 +3621,125 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
+@@ -2779,21 +3626,125 @@ export function SwarmCanvasPanel({ RuntimeHost = SwarmRuntimeHosts }: SwarmCanva
    );
  }
  
@@ -3442,7 +3484,7 @@ index 29cd389..cc51a55 100644
    canAssignCode,
    isRenaming,
    renameDraft,
-@@ -2803,19 +3749,24 @@ function DeviceSelection({
+@@ -2803,19 +3754,24 @@ function DeviceSelection({
    onCancelRename,
  }: {
    project: SwarmProject;
@@ -3469,7 +3511,7 @@ index 29cd389..cc51a55 100644
    canAssignCode: boolean;
    isRenaming: boolean;
    renameDraft: string;
-@@ -2824,129 +3775,136 @@ function DeviceSelection({
+@@ -2824,129 +3780,136 @@ function DeviceSelection({
    onCommitRename: () => void;
    onCancelRename: () => void;
  }) {
@@ -3712,7 +3754,7 @@ index 29cd389..cc51a55 100644
                onChange={(event) => {
                  const file = event.target.files?.[0];
                  if (file) {
-@@ -2955,46 +3913,58 @@ function DeviceSelection({
+@@ -2955,46 +3918,58 @@ function DeviceSelection({
                  event.currentTarget.value = '';
                }}
              />
@@ -3805,7 +3847,7 @@ index 29cd389..cc51a55 100644
    updateSource,
    onDeleteNode,
    onTogglePositionPin,
-@@ -3006,6 +3976,7 @@ function SourceSelection({
+@@ -3006,6 +3981,7 @@ function SourceSelection({
    onCancelRename,
  }: {
    source: EnvironmentSource;
@@ -3813,7 +3855,7 @@ index 29cd389..cc51a55 100644
    updateSource: (sourceId: EnvironmentSourceId, patch: Partial<EnvironmentSource>) => void;
    onDeleteNode: () => void;
    onTogglePositionPin: (sourceId: EnvironmentSourceId) => void;
-@@ -3022,12 +3993,17 @@ function SourceSelection({
+@@ -3022,12 +3998,17 @@ function SourceSelection({
    const propertiesLocked = isLockedNodeReadOnly(source);
    const pinControl = describePositionPinControl('source', locked, positionPinned);
    return (
@@ -3833,7 +3875,7 @@ index 29cd389..cc51a55 100644
                <span aria-hidden="true">🔒</span> Locked
              </span>
            ) : undefined
-@@ -3038,10 +4014,10 @@ function SourceSelection({
+@@ -3038,10 +4019,10 @@ function SourceSelection({
          onBeginRename={onBeginRename}
          onCommitRename={onCommitRename}
          onCancelRename={onCancelRename}
@@ -3847,7 +3889,7 @@ index 29cd389..cc51a55 100644
          {source.type === 'light'
            ? 'Light source'
            : source.type === 'sound'
-@@ -3049,104 +4025,106 @@ function SourceSelection({
+@@ -3049,104 +4030,106 @@ function SourceSelection({
              : source.type === 'temperature'
                ? 'Temperature source'
                : 'Magnet source'}
@@ -4042,7 +4084,7 @@ index 29cd389..cc51a55 100644
    );
  }
  
-@@ -3340,6 +4318,41 @@ function PinGlyph() {
+@@ -3340,6 +4323,41 @@ function PinGlyph() {
    );
  }
  
@@ -4084,7 +4126,7 @@ index 29cd389..cc51a55 100644
  function canAssignDeviceCode(
    device: Pick<VirtualDevice, 'locked' | 'programArtifactId'>,
    uploadState?: ArtifactUploadState,
-@@ -3352,6 +4365,32 @@ function canAssignDeviceCode(
+@@ -3352,6 +4370,32 @@ function canAssignDeviceCode(
    }
    return !device.programArtifactId;
  }
@@ -4117,7 +4159,34 @@ index 29cd389..cc51a55 100644
  
  function isPositionPinned(
    node: Pick<VirtualDevice, 'positionPinned'> | Pick<EnvironmentSource, 'positionPinned'> | undefined,
-@@ -4173,46 +5212,22 @@ function formatRuntimeLogMessage(message: string, deviceNames: Map<DeviceId, str
+@@ -3937,6 +4981,26 @@ export function translateRuntimeRadioPacketForRecipient(
+   return { data: new Uint8Array(packet.data) };
+ }
+ 
++/**
++ * A scripted broadcast is authored as text, but MicroPython receives it through
++ * `radio.receive()`, which only accepts messages tagged the way `radio.send(str)`
++ * tags them and raises "received packet is not a string" for a bare payload.
++ * Tag scripted text for MicroPython recipients; other runtimes keep the bytes
++ * their own cross-runtime translation already produced.
++ */
++export function encodeScriptedRadioPayloadForRecipient(
++  packet: RuntimeRadioPacket,
++  recipientRuntimeSource: RuntimeSource,
++): { data: Uint8Array } {
++  if (recipientRuntimeSource !== 'micropython') {
++    return { data: new Uint8Array(packet.data) };
++  }
++  if (packet.data[0] === 0x01 && packet.data[1] === 0x00 && packet.data[2] === 0x01) {
++    return { data: new Uint8Array(packet.data) };
++  }
++  return { data: encodeMicroPythonRadioString(new TextDecoder().decode(packet.data)) };
++}
++
+ function decodeMicroPythonRadioText(data: Uint8Array): string | undefined {
+   if (data[0] === 0x01 && data[1] === 0x00 && data[2] === 0x01) {
+     const decodedPrefixed = new TextDecoder().decode(data.subarray(3)).trim();
+@@ -4173,46 +5237,22 @@ function formatRuntimeLogMessage(message: string, deviceNames: Map<DeviceId, str
        `Blocked radio packet from ${resolveName(deviceId)}:`);
  }
  
@@ -4176,7 +4245,7 @@ index 29cd389..cc51a55 100644
  async function readHexFileBytes(file: File): Promise<Uint8Array> {
    if (typeof file.text === 'function') {
      return new TextEncoder().encode(await file.text());
-@@ -4275,34 +5290,51 @@ function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
+@@ -4275,34 +5315,51 @@ function readFileWithFileReader(file: File): Promise<ArrayBuffer> {
    });
  }
  
@@ -4235,7 +4304,7 @@ index 29cd389..cc51a55 100644
    return {
      x: ((clientX - rect.left) / rect.width) * canvasSize.width,
      y: ((clientY - rect.top) / rect.height) * canvasSize.height,
-@@ -4344,10 +5376,10 @@ function nextEnvironmentSourceNumber(
+@@ -4344,10 +5401,10 @@ function nextEnvironmentSourceNumber(
  }
  
  function clampPoint(point: Point): Point {
@@ -4248,7 +4317,7 @@ index 29cd389..cc51a55 100644
  }
  
  const emptyLedPixels = Array.from({ length: 25 }, () => 0);
-@@ -4498,6 +5530,13 @@ function normalizeRuntimeRadioPacket(
+@@ -4498,6 +5555,13 @@ function normalizeRuntimeRadioPacket(
    return { packet: normalized, diagnostics };
  }
  
