@@ -39,6 +39,8 @@ export type BridgeEvent =
       value: number;
     }
   | { kind: 'code-load'; device_id: string }
+  /** The runtime restarted its current program (scenario/scene reset). */
+  | { kind: 'code-restart'; device_id: string }
   | { kind: 'display'; device_id: string; pixels: number[] };
 
 export interface BridgeCommand {
@@ -316,7 +318,12 @@ export function wrapAdapterForBridge(
       await adapter.flash(program);
       emitBridgeEvent({ kind: 'code-load', device_id: deviceId });
     },
-    reset: () => adapter.reset(),
+    reset: async () => {
+      await adapter.reset();
+      // A restart re-runs the program, so a host can wait for the runtimes to
+      // come back before it treats the scene as isolated.
+      emitBridgeEvent({ kind: 'code-restart', device_id: deviceId });
+    },
     stop: () => adapter.stop(),
     setButton: async (button, pressed) => {
       await adapter.setButton(button, pressed);

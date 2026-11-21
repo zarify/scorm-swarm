@@ -10,6 +10,7 @@ This repository builds a browser-based activity authoring tool and SCORM 1.2 lea
 - `scripts/build.js` normalizes and validates activity configuration and scene bundles, bundles builder and learner browser entry points with esbuild, and assembles `dist/` output. The SCORM target needs simulator assets first.
 - `src/activity-builder/` authors configuration and scenarios; browser-side export packages config, manifest, template, and simulator assets.
 - `src/scorm-template/` loads the activity and simulator in an iframe. `src/shared/sim-bridge.js` owns the versioned, origin/source-checked `postMessage` protocol. Simulator events feed `test-runner.js`, `effect-evaluator.js`, and `hint-evaluator.js`.
+- Grading isolates test cases: `test-runner.js` awaits an `isolate` hook before every test, and `scene-isolation.js` reloads the authored scene geometry with the learner's current code, then waits for each programmed device's `code-restart`. A test case never inherits positions, added nodes, levels, radio, button or program state from another one.
 - Learner scene state persists through SCORM `suspend_data` and IndexedDB (`session-persistence.js` / `state-codec.js`). `npm run export` separately zips an already-built SCORM template.
 
 ## Key Directories
@@ -51,7 +52,7 @@ npm run export           # zip previously built SCORM template
 - `package.json` — root npm commands and dependencies.
 - `scripts/vendor-sim.js`, `scripts/build.js`, `scripts/dev.js`, `scripts/export-scorm.js` — simulator acquisition, app builds, local server, and ZIP packaging.
 - `src/shared/activity-config.schema.json`, `config-normalizer.js`, `config-validator.js` — config contract and processing.
-- `src/shared/sim-bridge.js`, `swarm-bundle.js`, `test-runner.js`, `effect-evaluator.js`, `hint-evaluator.js` — simulator protocol, scene format, grading, and hints.
+- `src/shared/sim-bridge.js`, `swarm-bundle.js`, `test-runner.js`, `effect-evaluator.js`, `hint-evaluator.js`, `scene-isolation.js` — simulator protocol, scene format, per-test isolation, grading, and hints.
 - `src/activity-builder/js/app.js`, `src/scorm-template/js/app.js` — builder and learner orchestration.
 - `src/scorm-template/js/scorm-wrapper.js`, `session-persistence.js`, `state-codec.js` — LMS integration and persistence.
 - `examples/demo-activity.json`, `examples/two-device-demo.swarm` — example inputs.

@@ -9,6 +9,7 @@ import {
   recordCheckAttempt,
 } from '../../shared/hint-evaluator.js';
 import { connectSimBridge } from '../../shared/sim-bridge.js';
+import { createSceneIsolation } from '../../shared/scene-isolation.js';
 import { getConfig, getSceneBundle, onConfigChange, onSceneChange, showToast } from './app.js';
 
 const LEARNER_URL = 'sim/index.html?mode=learner';
@@ -23,6 +24,7 @@ let connecting = false;
 /** Incremented on every connect attempt; stale attempts compare against it and bail out. */
 let connectToken = 0;
 let runner;
+let sceneIsolation;
 /** Incremented whenever the active runner is replaced or detached; stale runs compare against it. */
 let runnerToken = 0;
 let checkInProgress = false;
@@ -212,6 +214,7 @@ function invalidateRun() {
   runnerToken += 1;
   const previousRunner = runner;
   runner = undefined;
+  sceneIsolation = undefined;
   if (previousRunner) previousRunner.cancel();
   runProgress = new Map();
   checkInProgress = false;
@@ -234,9 +237,15 @@ function rebuildRunner() {
   if (previousRunner) previousRunner.cancel();
   if (bridgeReady && bridge) {
     const activeBridge = bridge;
+    sceneIsolation = createSceneIsolation({
+      bridge: activeBridge,
+      authoredBundleBase64: getSceneBundle(),
+      onWarning: (message) => showToast(message, 'error'),
+    });
     runner = createTestRunner({
       testCases: getConfig().evaluation.test_cases,
       bridge: activeBridge,
+      isolate: sceneIsolation.isolate,
       onEvent: (payload) => {
         if (activeBridge !== bridge) return;
         handleSimulatorEvent(payload, activeBridge);
@@ -276,6 +285,8 @@ async function checkSession() {
   updateControls();
   recordCheckAttempt(hintState);
   try {
+    await sceneIsolation?.prepare();
+    if (activeRunner !== runner || runToken !== runnerToken) return;
     const outcome = await activeRunner.runAll({
       onProgress: (progress) => {
         if (activeRunner !== runner || runToken !== runnerToken) return;

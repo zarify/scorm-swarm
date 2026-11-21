@@ -14,6 +14,12 @@ export function createTestRunner({
   onEvent = () => {},
   sleep,
   now,
+  /**
+   * Awaited before every test case, including the first. The host resets the
+   * simulator scene and waits for the programs to run again, so one test case
+   * cannot inherit another's state. Failures are reported per test case.
+   */
+  isolate,
 } = {}) {
   if (!bridge || typeof bridge !== 'object') {
     throw new TypeError('createTestRunner requires a bridge');
@@ -235,7 +241,7 @@ export function createTestRunner({
     return { passed: finalEvaluation.passed };
   }
 
-  async function runTest(testCase, feed, run) {
+  async function runTest(testCase, feed, run, sinceOverride) {
     const points = normalizePoints(testCase.points);
     const result = (passed, failedStepIndex, detail) => ({
       id: testCase.id,
@@ -247,7 +253,7 @@ export function createTestRunner({
     const steps = Array.isArray(testCase.steps) ? testCase.steps : [];
     const trigger = Array.isArray(testCase.trigger) ? testCase.trigger : [];
 
-    let since = nowFn();
+    let since = Number.isFinite(sinceOverride) ? sinceOverride : nowFn();
     for (let actionIndex = 0; actionIndex < trigger.length; actionIndex += 1) {
       if (isStale(run)) return result(false, null, 'cancelled');
       try {
@@ -315,7 +321,35 @@ export function createTestRunner({
           continue;
         }
         onProgress({ id: testCase.id, index, total, status: 'running' });
-        const result = await runTest(testCase, feed, run);
+        let setupFailure;
+        // The test's evidence window starts when its own reset starts: the
+        // program's first output after the restart belongs to this test, and
+        // nothing from the previous one does.
+        let windowStart;
+        if (typeof isolate === 'function') {
+          windowStart = nowFn();
+          try {
+            await isolate({ testCase, index, total, signal: run.signal });
+          } catch (error) {
+            if (!isStale(run)) setupFailure = errorMessage(error);
+          }
+        }
+        if (isStale(run)) {
+          onProgress({ id: testCase.id, index, total, status: 'cancelled' });
+          continue;
+        }
+        if (setupFailure !== undefined) {
+          results.push({
+            id: testCase.id,
+            passed: false,
+            failedStepIndex: null,
+            detail: `Setup failed: ${setupFailure}`,
+            points: normalizePoints(testCase.points),
+          });
+          onProgress({ id: testCase.id, index, total, status: 'failed' });
+          continue;
+        }
+        const result = await runTest(testCase, feed, run, windowStart);
         if (isStale(run) || result.detail === 'cancelled') {
           if (run === activeRun) onProgress({ id: testCase.id, index, total, status: 'cancelled' });
           continue;

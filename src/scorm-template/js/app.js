@@ -11,6 +11,8 @@ import {
   recordCheckAttempt,
 } from '../../shared/hint-evaluator.js';
 import { connectSimBridge } from '../../shared/sim-bridge.js';
+import { bytesToBase64 } from '../../shared/swarm-bundle.js';
+import { createSceneIsolation } from '../../shared/scene-isolation.js';
 import { normalizeConfig } from '../../shared/config-normalizer.js';
 import { validateConfig } from '../../shared/config-validator.js';
 import { renderInlineMarkdown } from '../../shared/inline-markdown.js';
@@ -18,6 +20,7 @@ import { renderInlineMarkdown } from '../../shared/inline-markdown.js';
 let config;
 let grader;
 let runner;
+let sceneIsolation;
 let hintState;
 let bridge;
 let bridgeReady = false;
@@ -81,7 +84,17 @@ async function startActivity() {
       terminated = false;
     });
     await connectSimulator(restoredSceneBase64);
-    runner = createTestRunner({ testCases: config.evaluation.test_cases, bridge, onEvent: handleSimulatorEvent });
+    sceneIsolation = createSceneIsolation({
+      bridge,
+      authoredBundleBase64: await fetchAuthoredSceneBundle(),
+      onWarning: (message) => setStatus(message, 'warning'),
+    });
+    runner = createTestRunner({
+      testCases: config.evaluation.test_cases,
+      bridge,
+      onEvent: handleSimulatorEvent,
+      isolate: sceneIsolation.isolate,
+    });
     document.getElementById('btn-check').disabled = false;
     // Cache the freshly connected scene without saving it: the packaged scene
     // is not student progress, and a save here would shadow a later oversized
@@ -131,6 +144,21 @@ async function connectSimulator(restoredSceneBase64 = null) {
   await connectingBridge.setUiVisibility(config.panel_visibility);
   if (restoredSceneBase64) {
     await connectingBridge.loadBundle(restoredSceneBase64);
+  }
+}
+
+/**
+ * The packaged scene is the geometry every graded test was written against: the
+ * simulator loads it by URL, and the app needs the bytes to rebuild the same
+ * baseline before each test case.
+ */
+async function fetchAuthoredSceneBundle() {
+  try {
+    const response = await fetch('config/scene.swarm', { cache: 'no-store' });
+    if (!response.ok) return null;
+    return bytesToBase64(new Uint8Array(await response.arrayBuffer()));
+  } catch {
+    return null;
   }
 }
 
@@ -219,6 +247,7 @@ async function runChecks() {
   openResultsModal();
   recordCheckAttempt(hintState);
   try {
+    await sceneIsolation?.prepare();
     const outcome = await runner.runAll({ onProgress: renderRunProgress });
     if (!Object.prototype.hasOwnProperty.call(outcome, 'score')) {
       runProgress.clear();

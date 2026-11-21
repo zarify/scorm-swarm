@@ -208,6 +208,117 @@ function makeRunner(h, testCases) {
   return createTestRunner({ testCases, bridge: h.bridge, sleep: h.sleep, now: h.now });
 }
 
+test('scene isolation runs before every test case, ahead of its triggers', async () => {
+  const h = createHarness();
+  const isolated = [];
+  const runner = createTestRunner({
+    testCases: [
+      pressATest({ id: 'a', steps: [serialCheck('button a', 0)] }),
+      pressATest({ id: 'b', steps: [serialCheck('button a', 0)] }),
+    ],
+    bridge: h.bridge,
+    sleep: h.sleep,
+    now: h.now,
+    isolate: async ({ testCase, index, total, signal }) => {
+      isolated.push({ id: testCase.id, index, total, hasSignal: Boolean(signal) });
+      h.commands.push({ type: 'isolate', at: h.clock.t });
+    },
+  });
+
+  await runner.runAll();
+
+  assert.deepEqual(isolated, [
+    { id: 'a', index: 0, total: 2, hasSignal: true },
+    { id: 'b', index: 1, total: 2, hasSignal: true },
+  ]);
+  const relevant = h.commands
+    .filter((command) => command.type === 'isolate' || command.type === 'press-button')
+    .map((command) => command.type);
+  assert.deepEqual(relevant, ['isolate', 'press-button', 'isolate', 'press-button']);
+});
+
+test('a failed isolation fails its test with a setup detail and leaves the trigger unfired', async () => {
+  const h = createHarness();
+  let calls = 0;
+  const runner = createTestRunner({
+    testCases: [
+      pressATest({ id: 'a', steps: [serialCheck('button a', 0)] }),
+      pressATest({ id: 'b', steps: [serialCheck('button a', 0)] }),
+    ],
+    bridge: h.bridge,
+    sleep: h.sleep,
+    now: h.now,
+    isolate: async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('The simulator did not restart alice within 5000 ms.');
+    },
+  });
+
+  const outcome = await runner.runAll();
+
+  assert.deepEqual(outcome.results[0], {
+    id: 'a',
+    passed: false,
+    failedStepIndex: null,
+    detail: 'Setup failed: The simulator did not restart alice within 5000 ms.',
+    points: 1,
+  });
+  assert.equal(outcome.results[1].passed, false);
+  assert.equal(outcome.results[1].detail, 'Condition not met.');
+  assert.equal(h.commands.filter((command) => command.type === 'press-button').length, 1);
+  assert.equal(outcome.earnedPoints, 0);
+  assert.equal(outcome.totalPoints, 2);
+});
+
+test('cancelling during isolation reports every test cancelled and fires nothing', async () => {
+  const h = createHarness();
+  let started;
+  const startedPromise = new Promise((resolve) => {
+    started = resolve;
+  });
+  const runner = createTestRunner({
+    testCases: [pressATest({ id: 'a' }), pressATest({ id: 'b' })],
+    bridge: h.bridge,
+    sleep: h.sleep,
+    now: h.now,
+    isolate: async ({ signal }) => {
+      started();
+      await new Promise((_resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    },
+  });
+
+  const running = runner.runAll();
+  await startedPromise;
+  runner.cancel();
+  const outcome = await running;
+
+  assert.deepEqual(outcome.results.map((result) => [result.id, result.detail]), [
+    ['a', 'cancelled'],
+    ['b', 'cancelled'],
+  ]);
+  assert.equal(h.commands.length, 0);
+});
+
+test('evidence emitted while the scene restarts counts for that test case', async () => {
+  const h = createHarness();
+  const runner = createTestRunner({
+    testCases: [pressATest({ id: 'a', trigger: [], steps: [serialCheck('boot', 200)] })],
+    bridge: h.bridge,
+    sleep: h.sleep,
+    now: h.now,
+    isolate: async () => {
+      h.emit({ kind: 'serial', device_id: 'alice', text: 'boot' });
+      h.clock.t += 500;
+    },
+  });
+
+  const outcome = await runner.runAll();
+  assert.equal(outcome.results[0].passed, true);
+  assert.equal(outcome.results[0].detail, 'passed');
+});
+
 test('repeated trigger actions fire count times with interval between fires', async () => {
   const h = createHarness();
   const runner = makeRunner(h, [pressATest({
