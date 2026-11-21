@@ -20,6 +20,20 @@ const simulatorTag = 'v0.16.0';
 const simulatorRevision = '971f7fbde2b17703fd53029123062ede9e5284dc';
 const vendorRoot = join(packageRoot, 'vendor/swarm-sim');
 const patchPath = 'sim-patch/edits.patch';
+/**
+ * MakeCode runner files duplicated byte-for-byte under `makecode-local/` and
+ * the content-addressed `cdn.makecode.com/blob/...` mirror. The package ships
+ * the mirror copy only; embed.js and makecode-patched-simulator.html load it.
+ */
+const deduplicatedSimFiles = new Set([
+  'makecode-local/highlight.pack.js',
+  'makecode-local/marked.min.js',
+  'makecode-local/jquery.js',
+  'makecode-local/semantic.js',
+  'makecode-local/target.js',
+  'makecode-local/pxtembed.js',
+  'makecode-local/pxtsim.js',
+]);
 const remedy =
   'Check access to the simulator GitHub repository or set SWARM_SIM_SRC to a committed swarm_sim checkout.';
 
@@ -154,7 +168,13 @@ async function main() {
     const simDist = join(packageRoot, 'dist/sim');
     rmSync(simDist, { recursive: true, force: true });
     mkdirSync(simDist, { recursive: true });
-    cpSync(join(vendorRoot, 'dist'), simDist, { recursive: true });
+    const builtSimDist = join(vendorRoot, 'dist');
+    cpSync(builtSimDist, simDist, {
+      recursive: true,
+      filter: (source) => !deduplicatedSimFiles.has(
+        relative(builtSimDist, source).split('\\').join('/'),
+      ),
+    });
     const files = collectFiles(simDist).sort((left, right) => left.localeCompare(right));
     writeFileSync(join(packageRoot, 'dist/sim-files.json'), `${JSON.stringify(files, null, 2)}\n`);
     console.log(`Vendored swarm_sim ${revision}; copied ${files.length} files to dist/sim/`);

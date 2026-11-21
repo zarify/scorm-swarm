@@ -73,52 +73,6 @@ export function encodeSwarmBundle(projectJson, { compress = true } = {}) {
   return bundle;
 }
 
-export function setDeviceFlags(project, deviceId, flags = {}) {
-  const device = project.devices.find((candidate) => candidate.id === deviceId);
-  if (!device) return project;
-
-  const locked = flags.locked ?? device.locked === true;
-  const positionPinned = flags.positionPinned ?? device.positionPinned === true;
-  const nextDevice = { ...device };
-  if (locked) nextDevice.locked = true;
-  else delete nextDevice.locked;
-  if (positionPinned) nextDevice.positionPinned = true;
-  else delete nextDevice.positionPinned;
-
-  if (Object.prototype.hasOwnProperty.call(flags, 'editableProgram')) {
-    if (flags.editableProgram == null) delete nextDevice.editableProgram;
-    else nextDevice.editableProgram = flags.editableProgram;
-  }
-  if (locked) delete nextDevice.editableProgram;
-
-  return {
-    ...project,
-    devices: project.devices.map((candidate) =>
-      candidate.id === deviceId ? nextDevice : candidate,
-    ),
-  };
-}
-
-export function setNodeFlags(project, nodeId, flags = {}) {
-  const node = project.environmentSources.find((candidate) => candidate.id === nodeId);
-  if (!node) return project;
-
-  const locked = flags.locked ?? node.locked === true;
-  const positionPinned = flags.positionPinned ?? node.positionPinned === true;
-  const nextNode = { ...node };
-  if (locked) nextNode.locked = true;
-  else delete nextNode.locked;
-  if (positionPinned) nextNode.positionPinned = true;
-  else delete nextNode.positionPinned;
-
-  return {
-    ...project,
-    environmentSources: project.environmentSources.map((candidate) =>
-      candidate.id === nodeId ? nextNode : candidate,
-    ),
-  };
-}
-
 function hasMagic(bytes) {
   for (let index = 0; index < MAGIC.length; index += 1) {
     if (bytes[index] !== MAGIC[index]) return false;

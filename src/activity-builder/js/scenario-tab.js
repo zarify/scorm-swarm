@@ -1,12 +1,22 @@
-import { base64ToBytes, bytesToBase64, decodeSwarmBundle, encodeSwarmBundle, setDeviceFlags, setNodeFlags } from '../../shared/swarm-bundle.js';
+import { base64ToBytes, bytesToBase64, decodeSwarmBundle } from '../../shared/swarm-bundle.js';
 import { connectSimBridge } from '../../shared/sim-bridge.js';
 import { getSceneBundle, getSceneProject, onSceneChange, setSceneBundle, showToast } from './app.js';
+
+const REQUEST_TIMEOUT_MS = 10_000;
+const UNLOCK_FOR_EDIT_TOOLTIP = 'Unlock this device to change whether its code is editable.';
+const NO_EDITABLE_CODE_TOOLTIP = 'Load or edit code on this device in the simulator first.';
 
 let bridge;
 let bridgeReady = false;
 let currentBundle;
 let currentProject;
 let bundleLoadChain = Promise.resolve();
+/**
+ * Authoring imports (activity JSON, `.swarm` files) supersede anything already
+ * in flight; operations remember the generation they were queued under and
+ * never publish a snapshot that a newer import has replaced.
+ */
+let sceneImportGeneration = 0;
 
 export function initScenarioTab() {
   currentBundle = getSceneBundle();
@@ -22,6 +32,9 @@ export function initScenarioTab() {
   document.getElementById('btn-load-scene').addEventListener('click', () => fileInput.click());
   fileInput.addEventListener('change', () => void loadSceneFile(fileInput));
   onSceneChange((bundle, project, source) => {
+    if (source === 'import' || source === 'scene-import') {
+      sceneImportGeneration += 1;
+    }
     currentBundle = bundle;
     currentProject = project;
     if (bundle && !project) {
@@ -38,11 +51,35 @@ export function initScenarioTab() {
     renderSceneTable();
     updateSceneButtons();
     if ((source === 'import' || source === 'scene-import') && currentBundle && bridgeReady) {
-      void loadBundleIntoSimulator(currentBundle);
+      void loadBundleIntoSimulator(currentBundle).catch((error) => {
+        setConnectionStatus(
+          error instanceof Error ? error.message : 'Simulator could not load the imported scene.',
+          'error',
+        );
+      });
     }
   });
   renderSceneTable();
   updateSceneButtons();
+}
+
+/**
+ * Serialize simulator work: loads and flag changes must not interleave, or an
+ * older reply could publish a snapshot over a newer one. The chain itself never
+ * stays rejected; each caller still sees its own failure.
+ */
+function queueScenarioRequest(run) {
+  const activeBridge = bridge;
+  const generation = sceneImportGeneration;
+  const task = bundleLoadChain.then(() => {
+    if (!bridgeReady || activeBridge !== bridge) return undefined;
+    return run({ activeBridge, generation });
+  });
+  bundleLoadChain = task.then(
+    () => {},
+    () => {},
+  );
+  return task;
 }
 
 async function connectFrame(iframe) {
@@ -57,7 +94,7 @@ async function connectFrame(iframe) {
   const targetOrigin = new URL('sim/index.html', window.location.href).origin;
   bridge = connectSimBridge(frameWindow, targetOrigin);
   const connectingBridge = bridge;
-  iframe.src = 'sim/index.html';
+  iframe.src = 'sim/index.html?mode=scenario';
   try {
     const ready = await connectingBridge.ready;
     if (!ready || connectingBridge !== bridge) return;
@@ -73,13 +110,14 @@ async function connectFrame(iframe) {
 async function captureScene() {
   if (!bridgeReady || !bridge) return;
   try {
-    const base64 = await bridge.getBundle();
-    currentBundle = base64;
-    currentProject = decodeSwarmBundle(base64ToBytes(base64));
-    setSceneBundle(base64, currentProject, 'scenario');
-    setConnectionStatus('Scene captured.');
-    renderSceneTable();
-    updateSceneButtons();
+    await queueScenarioRequest(async ({ activeBridge, generation }) => {
+      const base64 = await activeBridge.getBundle({ timeoutMs: REQUEST_TIMEOUT_MS });
+      if (generation !== sceneImportGeneration) return;
+      currentBundle = base64;
+      currentProject = decodeSwarmBundle(base64ToBytes(base64));
+      setSceneBundle(base64, currentProject, 'scenario');
+      setConnectionStatus('Scene captured.');
+    });
   } catch (error) {
     showToast(`Could not capture scene: ${error instanceof Error ? error.message : String(error)}`, 'error');
   }
@@ -88,17 +126,20 @@ async function captureScene() {
 async function loadSceneFile(fileInput) {
   const file = fileInput.files?.[0];
   if (!file) return;
+  // A newly selected file supersedes in-flight captures and flag replies.
+  sceneImportGeneration += 1;
+  const generation = sceneImportGeneration;
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const project = decodeSwarmBundle(bytes);
+    if (generation !== sceneImportGeneration) return;
     const base64 = bytesToBase64(bytes);
+    await loadBundleIntoSimulator(base64);
+    if (generation !== sceneImportGeneration) return;
     currentBundle = base64;
     currentProject = project;
-    if (bridgeReady) await loadBundleIntoSimulator(base64);
     setSceneBundle(base64, project, 'scenario-file');
     setConnectionStatus(`Loaded ${file.name}.`);
-    renderSceneTable();
-    updateSceneButtons();
   } catch (error) {
     showToast(`Could not load .swarm file: ${error instanceof Error ? error.message : String(error)}`, 'error');
   } finally {
@@ -117,35 +158,38 @@ async function reloadScene() {
 }
 
 function loadBundleIntoSimulator(base64) {
-  const activeBridge = bridge;
-  if (!bridgeReady || !activeBridge) return Promise.resolve();
-  bundleLoadChain = bundleLoadChain
-    .catch(() => {})
-    .then(() => {
-      if (activeBridge !== bridge || !bridgeReady) return;
-      return activeBridge.loadBundle(base64);
-    });
-  return bundleLoadChain;
+  return queueScenarioRequest(({ activeBridge }) =>
+    activeBridge.loadBundle(base64, { timeoutMs: REQUEST_TIMEOUT_MS }),
+  );
 }
 
-async function updateFlags(kind, nodeId, flags) {
-  if (!currentProject) return;
-  const nextProject = kind === 'device'
-    ? setDeviceFlags(currentProject, nodeId, flags)
-    : setNodeFlags(currentProject, nodeId, flags);
-  if (nextProject === currentProject) return;
-  currentProject = nextProject;
-  currentBundle = bytesToBase64(encodeSwarmBundle(nextProject));
-  setSceneBundle(currentBundle, currentProject, 'scenario');
-  renderSceneTable();
-  updateSceneButtons();
-  if (bridgeReady) {
-    try {
-      await loadBundleIntoSimulator(currentBundle);
+/**
+ * Send one starting-rule change and adopt the simulator's returned snapshot.
+ * The reply is authoritative: the simulator applied the change to its live
+ * project, so nothing is reloaded into the frame and no captured copy is sent.
+ */
+async function updateFlags(kind, id, flag, value) {
+  if (!bridgeReady || !bridge) return;
+  try {
+    await queueScenarioRequest(async ({ activeBridge, generation }) => {
+      const base64 = await activeBridge.setSceneFlag(
+        { kind, id, flag, value },
+        { timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+      if (generation !== sceneImportGeneration) return;
+      const project = decodeSwarmBundle(base64ToBytes(base64));
+      currentBundle = base64;
+      currentProject = project;
+      setSceneBundle(base64, project, 'scenario');
       setConnectionStatus('Scene rules saved to the simulator.');
-    } catch (error) {
-      showToast(`Scene saved, but simulator reload failed: ${error.message}`, 'error');
-    }
+    });
+  } catch (error) {
+    // Nothing was applied; put the table back to the captured state.
+    renderSceneTable();
+    showToast(
+      `Could not save scene rules: ${error instanceof Error ? error.message : String(error)}`,
+      'error',
+    );
   }
 }
 
@@ -182,12 +226,8 @@ function renderSceneTable() {
       position: device.position,
       locked: device.locked,
       positionPinned: device.positionPinned,
-      editableProgram: device.editableProgram,
-      onFlagChange: (flag, value) => updateFlags(
-        'device',
-        device.id,
-        flag === 'editableProgram' ? { editableProgram: value } : { [flag]: value },
-      ),
+      editableProgram: describeDeviceEditableCode(device),
+      onFlagChange: (flag, value) => updateFlags('device', device.id, flag, value),
     }));
   }
   for (const node of nodes) {
@@ -198,12 +238,40 @@ function renderSceneTable() {
       position: node.position,
       locked: node.locked,
       positionPinned: node.positionPinned,
-      editableProgram: undefined,
-      onFlagChange: (flag, value) => updateFlags('node', node.id, { [flag]: value }),
+      editableProgram: {
+        checked: false,
+        disabled: true,
+        title: NO_EDITABLE_CODE_TOOLTIP,
+      },
+      onFlagChange: (flag, value) => updateFlags('node', node.id, flag, value),
     }));
   }
   table.append(head, body);
   host.append(table);
+}
+
+/**
+ * The checkbox reflects the *active* editable snapshot on an unlocked device.
+ * Whether it can be checked at all depends on the assigned artifact carrying a
+ * recoverable program: a locked device must first be unlocked, and an
+ * artifact-free device has nothing to reconstruct source from.
+ */
+function describeDeviceEditableCode(device) {
+  const artifact = device.programArtifactId
+    ? (currentProject?.artifacts ?? []).find((candidate) => candidate.id === device.programArtifactId)
+    : undefined;
+  const checked = Boolean(
+    !device.locked &&
+      device.editableProgram &&
+      device.editableProgram.baseArtifactId === device.programArtifactId,
+  );
+  if (device.locked) {
+    return { checked: false, disabled: true, title: UNLOCK_FOR_EDIT_TOOLTIP };
+  }
+  if (!artifact || !('program' in artifact)) {
+    return { checked: false, disabled: true, title: NO_EDITABLE_CODE_TOOLTIP };
+  }
+  return { checked, disabled: false, title: undefined };
 }
 
 function renderSceneRow({ name, id, kind, position, locked, positionPinned, editableProgram, onFlagChange }) {
@@ -225,14 +293,12 @@ function renderSceneRow({ name, id, kind, position, locked, positionPinned, edit
     flagCell('locked', locked, (value) => onFlagChange('locked', value)),
     flagCell('positionPinned', positionPinned, (value) => onFlagChange('positionPinned', value)),
   );
-  const editable = flagCell('editableProgram', Boolean(editableProgram), (value) =>
-    onFlagChange('editableProgram', value ? editableProgram : null),
+  const editable = flagCell('editableProgram', editableProgram.checked, (value) =>
+    onFlagChange('editableProgram', value),
   );
   const checkbox = editable.querySelector('input');
-  if (kind !== 'device' || !editableProgram) {
-    checkbox.disabled = true;
-    checkbox.title = 'Load or edit code on this device in the simulator first.';
-  }
+  checkbox.disabled = editableProgram.disabled;
+  if (editableProgram.title) checkbox.title = editableProgram.title;
   row.append(editable);
   return row;
 }

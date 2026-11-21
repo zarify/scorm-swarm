@@ -52,6 +52,7 @@ export interface BridgeCommand {
     | 'set-node-level'
     | 'add-node'
     | 'move-node'
+    | 'set-scene-flag'
     | 'set-ui-visibility'
     | 'get-display'
     | 'get-node-positions';
@@ -123,6 +124,7 @@ const allowedCommands: Record<BridgeCommand['type'], true> = {
   'set-node-level': true,
   'add-node': true,
   'move-node': true,
+  'set-scene-flag': true,
   'set-ui-visibility': true,
   'get-display': true,
   'get-node-positions': true,

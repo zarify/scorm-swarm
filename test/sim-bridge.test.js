@@ -154,6 +154,34 @@ test('node position requests carry the pairs and return the reported rows', asyn
   bridge.close();
 });
 
+test('scene flag requests post the change and resolve with the returned bundle', async () => {
+  const { bridge, harness } = await createConnectedBridge();
+  const change = { kind: 'device', id: 'alice', flag: 'locked', value: true };
+  const pending = bridge.setSceneFlag(change, { timeoutMs: 500 });
+  await flush();
+  const message = harness.sent[0];
+  assert.equal(message.type, 'set-scene-flag');
+  assert.deepEqual(message.payload, change);
+  harness.reply({ source: 'swarm-sim-bridge', v: 1, type: 'bundle', id: message.id, payload: 'U1dBUk0=' });
+  assert.equal(await pending, 'U1dBUk0=');
+
+  const refused = bridge.setSceneFlag(
+    { kind: 'node', id: 'ghost', flag: 'locked', value: true },
+    { timeoutMs: 500 },
+  );
+  await flush();
+  const second = harness.sent[1];
+  harness.reply({
+    source: 'swarm-sim-bridge',
+    v: 1,
+    type: 'error',
+    id: second.id,
+    payload: { message: 'Unknown scene node: ghost' },
+  });
+  await assert.rejects(() => refused, /Unknown scene node: ghost/);
+  bridge.close();
+});
+
 test('close rejects every pending request and stops listening', async () => {
   const { bridge, harness } = await createConnectedBridge();
   const pending = bridge.getDisplay({ timeoutMs: 5_000 });

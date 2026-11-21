@@ -8,6 +8,7 @@ const REQUEST_RESPONSES = {
   'set-node-level': 'ack',
   'add-node': 'ack',
   'move-node': 'ack',
+  'set-scene-flag': 'bundle',
 };
 
 const COMMAND_TYPES = {
@@ -210,6 +211,13 @@ export function connectSimBridge(iframeWindow, targetOrigin) {
     },
     moveNode(payload, options) {
       return request('move-node', payload, options);
+    },
+    /**
+     * Apply one authored starting rule and return the simulator's full current
+     * scene bundle. The reply is the snapshot, not an acknowledgement.
+     */
+    setSceneFlag(payload, options) {
+      return request('set-scene-flag', payload, options);
     },
     getDisplay(options) {
       return request('get-display', undefined, options).then((payload) => payload.displays);

@@ -24,4 +24,25 @@ describe('readLaunchConfig', () => {
     expect(readLaunchConfig('https://example.invalid/index.html?mode=author&learner=true'))
       .toEqual({ learnerMode: false });
   });
+
+  it('opts the scenario editor frame into scenario authoring', () => {
+    expect(
+      readLaunchConfig('https://example.invalid/index.html?mode=scenario&bundle=scenes/demo.swarm'),
+    ).toEqual({ learnerMode: false, scenarioAuthoring: true, bundlePath: 'scenes/demo.swarm' });
+    expect(readLaunchConfig('https://example.invalid/index.html?mode=SCENARIO')).toEqual({
+      learnerMode: false,
+      scenarioAuthoring: true,
+    });
+  });
+
+  it('keeps learner and read-only launches out of scenario authoring', () => {
+    expect(readLaunchConfig('https://example.invalid/index.html?mode=scenario&learner=1'))
+      .toEqual({ learnerMode: true });
+    expect(readLaunchConfig('https://example.invalid/index.html?mode=scenario&readonly=1'))
+      .toEqual({ learnerMode: true });
+    expect(readLaunchConfig('https://example.invalid/index.html?readonly=1')).toEqual({
+      learnerMode: true,
+    });
+    expect(readLaunchConfig('https://example.invalid/index.html')).toEqual({ learnerMode: false });
+  });
 });
