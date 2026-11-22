@@ -348,8 +348,11 @@ function renderChecklist(results = [], { showFeedback = false, progress = runPro
     if (showFeedback && result) {
       const feedback = document.createElement('small');
       feedback.className = 'test-feedback';
-      feedback.textContent = result.passed ? testCase.feedback_on_pass ?? '' : testCase.feedback_on_fail ?? '';
-      if (feedback.textContent) content.append(feedback);
+      const message = result.passed ? testCase.feedback_on_pass ?? '' : testCase.feedback_on_fail ?? '';
+      if (message) {
+        feedback.innerHTML = renderInlineMarkdown(message);
+        content.append(feedback);
+      }
       if (!result.passed && result.detail) {
         const resultDetail = document.createElement('small');
         resultDetail.className = 'test-result-detail';
@@ -386,7 +389,7 @@ function renderHints(result = evaluateHints(config.hints, hintState, { type: 'ti
     mark.textContent = hint.triggered ? '✓' : '·';
     const message = document.createElement('span');
     message.className = 'hint-message';
-    message.textContent = hint.message;
+    message.innerHTML = renderInlineMarkdown(hint.message);
     card.append(mark, message);
     list.append(card);
     if (hint.show_once && hint.triggered && hint.display_mode !== 'checklist') consumeHint(hintState, hint.id);

@@ -10,6 +10,7 @@ import {
 } from '../../shared/hint-evaluator.js';
 import { connectSimBridge } from '../../shared/sim-bridge.js';
 import { createSceneIsolation } from '../../shared/scene-isolation.js';
+import { renderInlineMarkdown } from '../../shared/inline-markdown.js';
 import { getConfig, getSceneBundle, onConfigChange, onSceneChange, showToast } from './app.js';
 
 const LEARNER_URL = 'sim/index.html?mode=learner';
@@ -368,14 +369,24 @@ function renderGrades(results, { showFeedback = false } = {}) {
     title.textContent = testCase.id;
     const detail = document.createElement('span');
     const label = state === 'passed' ? 'PASS' : state === 'failed' ? 'FAIL' : state === 'running' ? 'RUNNING…' : 'NOT RUN';
-    const parts = [`${label} · ${points} pt${points === 1 ? '' : 's'}`];
+    detail.textContent = `${label} · ${points} pt${points === 1 ? '' : 's'}`;
+    row.append(title, detail);
     if (showFeedback && result) {
       const feedback = result.passed ? testCase.feedback_on_pass : testCase.feedback_on_fail;
-      if (feedback) parts.push(feedback);
-      if (!result.passed && result.detail) parts.push(result.detail);
+      const note = document.createElement('span');
+      note.className = 'grade-feedback';
+      if (feedback) {
+        const authored = document.createElement('span');
+        authored.className = 'grade-feedback__authored';
+        authored.innerHTML = renderInlineMarkdown(feedback);
+        note.append(authored);
+      }
+      if (!result.passed && result.detail) {
+        if (note.childNodes.length > 0) note.append(document.createTextNode(' · '));
+        note.append(document.createTextNode(result.detail));
+      }
+      if (note.childNodes.length > 0) row.append(note);
     }
-    detail.textContent = parts.join(' · ');
-    row.append(title, detail);
     list.append(row);
   }
   const score = possible === 0 ? 0 : Math.round((earned / possible) * 100);
@@ -401,7 +412,7 @@ function renderHints() {
     card.className = 'preview-hint';
     card.dataset.style = hint.style ?? 'info';
     card.dataset.triggered = String(hint.triggered);
-    card.textContent = hint.message;
+    card.innerHTML = renderInlineMarkdown(hint.message);
     panel.append(card);
     if (hint.show_once && hint.triggered && hint.display_mode !== 'checklist') {
       consumeHint(hintState, hint.id);

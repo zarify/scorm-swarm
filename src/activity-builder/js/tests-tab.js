@@ -5,6 +5,8 @@ import { makeButton } from './form-fields.js';
 import { enableListReordering, getSelectionIndexAfterMove, moveListItem } from './list-reorder.js';
 
 const DEFAULT_TIMEOUT_MS = 5000;
+const LED_FENCE_HELP =
+  'For a micro:bit display, put five rows of five digits between standalone ```led and ``` lines. 0 is off; # is 9.';
 
 let selectedTestIndex = -1;
 
@@ -332,13 +334,16 @@ function renderFeedbackShell(testCase) {
   const title = document.createElement('div');
   title.className = 'condition-editor-title';
   title.innerHTML = '<strong>Feedback</strong><small>Shown to the learner with the graded result</small>';
+  const fenceHelp = document.createElement('p');
+  fenceHelp.className = 'field-help';
+  fenceHelp.textContent = LED_FENCE_HELP;
   const grid = document.createElement('div');
   grid.className = 'field-grid';
   appendTextField(grid, 'Feedback on pass', testCase.feedback_on_pass ?? '',
     (value) => updateTest({ feedback_on_pass: value }), true, true);
   appendTextField(grid, 'Feedback on fail', testCase.feedback_on_fail ?? '',
     (value) => updateTest({ feedback_on_fail: value }), true, true);
-  shell.append(title, grid);
+  shell.append(title, fenceHelp, grid);
   return shell;
 }
 

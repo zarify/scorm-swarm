@@ -642,10 +642,12 @@ label.inline-toggle > input[type="checkbox"] {
 .empty-note { color: #666; font-size: 13px; line-height: 1.5; }
 .score-readout { color: #1976d2; font: 700 19px ui-monospace, SFMono-Regular, Menlo, monospace; }
 .grade-list { display: grid; gap: 6px; overflow: auto; }
-.grade-row { display: flex; justify-content: space-between; gap: 12px; padding: 8px 9px; border: 1px solid #ddd; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.grade-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; padding: 8px 9px; border: 1px solid #ddd; border-radius: 6px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.grade-feedback { flex: 1 0 100%; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
 .grade-row[data-passed="true"] { border-color: #a5d6a7; background: #e8f5e9; }
 .grade-row strong { font: inherit; }
 .preview-hints { display: grid; gap: 6px; margin-top: 9px; overflow: auto; }
+.led-screen { display: block; max-width: 100%; height: auto; margin-block: .35em; }
 .preview-hints:empty { display: none; }
 .preview-hint { padding: 8px 9px; border-left: 3px solid #1976d2; background: #e3f2fd; font-size: 13px; line-height: 1.4; }
 .preview-hint[data-style="warning"] { border-left-color: #c62828; background: #ffebee; }

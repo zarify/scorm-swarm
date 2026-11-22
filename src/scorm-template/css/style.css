@@ -361,6 +361,13 @@ body {
   font-weight: 600;
 }
 
+.led-screen {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-block: .35em;
+}
+
 .check-error {
   padding: 10px 12px;
   background: #ffebee;

@@ -4,6 +4,9 @@ import { enableListReordering, getSelectionIndexAfterMove, moveListItem } from '
 
 let selectedHintIndex = -1;
 
+const LED_FENCE_HELP =
+  'For a micro:bit display, put five rows of five digits between standalone ```led and ``` lines. 0 is off; # is 9.';
+
 /**
  * Section open state, one entry per edited hint object. Never serialized and
  * never written into the config: it only controls the local disclosure UI.
@@ -158,7 +161,7 @@ function renderHintEditor() {
     ['test_fail', 'Failed Check'],
     ['manual', 'Manual request'],
   ], (value) => updateTrigger({ event: value }));
-  appendTextField(grid, 'Message', hint.message, (value) => updateHint({ message: value }), true, true);
+  appendTextField(grid, 'Message', hint.message, (value) => updateHint({ message: value }), true, true, LED_FENCE_HELP);
   appendNumberField(grid, 'Priority', hint.priority, (value) => updateHint({ priority: value }), { minimum: 1, integer: true });
   appendNumberField(grid, 'Delay · seconds', hint.delay_seconds, (value) => updateHint({ delay_seconds: value }), { minimum: 0 });
   appendNumberField(grid, 'After Check attempts', hint.trigger.after_attempts,
@@ -260,13 +263,19 @@ function emptyRow(message) {
   return note;
 }
 
-function appendTextField(parent, labelText, value, onChange, wide = false, textarea = false) {
+function appendTextField(parent, labelText, value, onChange, wide = false, textarea = false, help = '') {
   const field = makeField(labelText, wide);
   const input = document.createElement(textarea ? 'textarea' : 'input');
   if (!textarea) input.type = 'text';
   input.value = value ?? '';
   input.addEventListener('change', () => onChange(input.value));
   field.append(input);
+  if (help) {
+    const note = document.createElement('small');
+    note.className = 'field-help';
+    note.textContent = help;
+    field.append(note);
+  }
   parent.append(field);
 }
 
