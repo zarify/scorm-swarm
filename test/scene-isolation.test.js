@@ -177,6 +177,29 @@ test('authored code survives when the live scene still references it', () => {
   assert.deepEqual(merged.artifacts.map((entry) => entry.id), ['authored-code']);
 });
 
+test('a live device without code keeps its authored pin but not its authored code', async () => {
+  const authored = authoredScene();
+  authored.devices = [{ ...authored.devices[0], positionPinned: true }];
+  const live = {
+    ...liveScene(),
+    devices: [{ id: 'device-1', name: 'Node 1', position: { x: 10, y: 20 } }],
+    artifacts: [],
+  };
+  const { bridge, loads } = createBridge({ live, restartDeviceIds: [] });
+  const isolation = createSceneIsolation({ bridge, authoredBundleBase64: encoded(authored) });
+
+  const prepared = await isolation.prepare();
+  assert.deepEqual(prepared, { authored: true, deviceCount: 0 });
+  await isolation.isolate({});
+
+  const device = loads[0].project.devices[0];
+  assert.equal(device.positionPinned, true);
+  assert.deepEqual(device.position, { x: 100, y: 100 });
+  assert.equal(device.programArtifactId, undefined);
+  assert.equal(device.editableProgram, undefined);
+  assert.deepEqual(loads[0].project.artifacts, []);
+});
+
 test('isolate loads the merged baseline and waits for every programmed device', async () => {
   const { bridge, loads } = createBridge({ restartDeviceIds: ['device-1'] });
   const isolation = createSceneIsolation({ bridge, authoredBundleBase64: encoded(authoredScene()) });

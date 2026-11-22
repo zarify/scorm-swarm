@@ -21,8 +21,16 @@ export function restoreAuthoredScene(authored, current) {
     if (!live) {
       return device;
     }
+    // A device present in the live scene keeps its live code assignment only.
+    // Spreading the authored device first would let authored code reappear when
+    // the learner unloaded it, silently undoing that change on Check.
+    const {
+      programArtifactId: _authoredArtifactId,
+      editableProgram: _authoredEditableProgram,
+      ...geometry
+    } = device;
     return {
-      ...device,
+      ...geometry,
       ...(live.programArtifactId === undefined ? {} : { programArtifactId: live.programArtifactId }),
       ...(live.editableProgram === undefined ? {} : { editableProgram: live.editableProgram }),
     };
