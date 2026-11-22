@@ -7,11 +7,23 @@ import { extname, join, resolve, sep } from 'node:path';
 import { test, before, after } from 'node:test';
 import { chromium } from 'playwright';
 import { MOCK_SCORM_INIT, readLmsModel } from './helpers/mock-lms.js';
+import { decodeSwarmBundle, encodeSwarmBundle } from '../../src/shared/swarm-bundle.js';
 
 const projectRoot = resolve(new URL('../..', import.meta.url).pathname);
 const packageRoot = join(projectRoot, 'dist/scorm-template');
+const builderRoot = join(projectRoot, 'dist/builder');
 const stubSimulator = readFileSync(new URL('./fixtures/stub-sim.html', import.meta.url));
 const shellRoot = join(homedir(), '.omp/chrome-headless-shell/chrome-headless-shell');
+
+/**
+ * Nested mounts keep the builder and the packaged SCORM package at the depths
+ * they really ship at: the builder beside its own simulator, and the package
+ * under a Moodle module path. Neither is special-cased anywhere else.
+ */
+const nestedMounts = [
+  ['/nested/swarm/builder/', builderRoot],
+  ['/nested/moodle/mod/scorm/radio-relay/', packageRoot],
+];
 const contentTypes = {
   '.css': 'text/css; charset=utf-8',
   '.html': 'text/html; charset=utf-8',
@@ -359,6 +371,395 @@ test('small scene state is saved in full and restores from suspend_data when Ind
 });
 
 /**
+ * Both surfaces run the same authored tests, so they differ only in where the
+ * canvas iframe, the result rows and the score readout live.
+ */
+const DEMO_SURFACES = {
+  builder: {
+    frame: '#preview-iframe',
+    check: '#btn-check-session',
+    rows: '#preview-grades .grade-row',
+    score: '#preview-score',
+  },
+  package: {
+    frame: '#simulator-frame',
+    check: '#btn-check',
+    rows: '#test-checklist .test-row',
+    score: '#check-count',
+  },
+};
+
+/**
+ * The shipped demo, on both real surfaces, with the authored device order as
+ * shipped (Bob first) and with Alice first. Selecting a canvas device or
+ * hiding diagnostics rows from the views must never change what Check injects,
+ * records, or grades: every case has to reach the same three passes.
+ */
+test('real demo Check is independent of canvas selection', async (t) => {
+  assert.ok(browser, 'A Playwright Chromium build is required for browser tests.');
+  assert.ok(existsSync(join(builderRoot, 'index.html')), 'Run npm run build before test:browser.');
+  assert.ok(existsSync(join(packageRoot, 'index.html')), 'Run npm run build before test:browser.');
+
+  const shippedScene = {
+    name: 'two-device-demo.swarm',
+    bytes: readFileSync(join(projectRoot, 'examples/two-device-demo.swarm')),
+  };
+  const aliceFirstScene = { name: 'alice-first-demo.swarm', bytes: reverseDemoDeviceOrder() };
+
+  const scenarios = [
+    {
+      name: 'builder · shipped order · Alice selected · diagnostics filters off',
+      surface: 'builder',
+      selected: 'alice',
+      filtersOff: true,
+      scene: shippedScene,
+    },
+    {
+      name: 'builder · shipped order · Bob selected · default diagnostics',
+      surface: 'builder',
+      selected: 'bob',
+      filtersOff: false,
+      scene: shippedScene,
+    },
+    {
+      name: 'builder · Alice-first order · Alice selected',
+      surface: 'builder',
+      selected: 'alice',
+      filtersOff: false,
+      scene: aliceFirstScene,
+    },
+    { name: 'package · shipped order · Alice selected', surface: 'package', selected: 'alice', filtersOff: false, scene: null },
+    { name: 'package · shipped order · Bob selected', surface: 'package', selected: 'bob', filtersOff: false, scene: null },
+  ];
+
+  for (const scenario of scenarios) {
+    await t.test(scenario.name, async () => {
+      // A fresh context per case: no scene cache, no IndexedDB, no LMS history.
+      const context = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+      try {
+        const failures = [];
+        if (scenario.surface === 'package') {
+          await context.addInitScript(MOCK_SCORM_INIT, {
+            seedModel: { 'cmi.core.student_id': `learner-selection-${scenario.selected}` },
+          });
+        }
+        const page = await context.newPage();
+        collectFirstPartyFailures(page, failures);
+        const surface = DEMO_SURFACES[scenario.surface];
+
+        if (scenario.surface === 'builder') {
+          await openBuilderDemo(page, scenario);
+        } else {
+          await openPackagedDemo(page);
+        }
+        await waitForDemoRuntimes(page, surface.frame);
+        await selectCanvasDevice(page, surface.frame, scenario.selected);
+        const selectedBeforeCheck = await selectedCanvasDevice(page, surface.frame);
+        assert.equal(
+          selectedBeforeCheck,
+          scenario.selected,
+          'the requested device is the selected canvas device before Check',
+        );
+        const filters = scenario.filtersOff
+          ? await turnOffDiagnosticsFilters(page, surface.frame)
+          : null;
+
+        await installSimulatorMessageTrace(page, surface.frame);
+        await page.click(surface.check);
+        // A run always ends: every row is decided and Check is usable again,
+        // so a failure is reported with its row detail instead of a hang.
+        await page.waitForFunction(({ rows, check }) => {
+          const nodes = [...document.querySelectorAll(rows)];
+          if (nodes.length !== 3) return false;
+          if (!nodes.every((node) => node.dataset.status === 'passed' || node.dataset.status === 'failed')) {
+            return false;
+          }
+          return document.querySelector(check)?.disabled === false;
+        }, { rows: surface.rows, check: surface.check }, { timeout: 90_000, polling: 100 });
+
+        const trace = await page.evaluate(() => window.__demoBridgeTrace ?? []);
+        const rows = await page.$$eval(surface.rows, (nodes) =>
+          nodes.map((node) => [node.dataset.status, node.querySelector('strong')?.textContent]));
+        const scoreText = await page.textContent(surface.score);
+        const rawScore = scenario.surface === 'builder' ? null : (await readLmsModel(page))['cmi.core.score.raw'];
+
+        try {
+          assert.deepEqual(
+            rows.map(([status, id]) => [id, status]),
+            [
+              ['button-a-serial', 'passed'],
+              ['button-a-display', 'passed'],
+              ['bob-hears-ping', 'passed'],
+            ],
+          );
+          if (scenario.surface === 'builder') {
+            assert.equal(scoreText, '100%');
+          } else {
+            assert.equal(scoreText, '3 / 3');
+            assert.equal(rawScore, '100');
+          }
+          if (filters) {
+            assert.deepEqual(filters, { serial: false, radio: false });
+          }
+          assert.ok(
+            trace.some((entry) => entry.kind === 'code-restart' && entry.device === scenario.selected),
+            `the selected device ${scenario.selected} restarts its program inside the run`,
+          );
+          assert.deepEqual(failures, []);
+        } catch (error) {
+          error.message = [
+            error.message,
+            `surface: ${scenario.surface} · selected before Check: ${selectedBeforeCheck}`,
+            `rows: ${JSON.stringify(rows)} · score: ${scoreText} · raw: ${rawScore} · filters: ${JSON.stringify(filters)}`,
+            `page failures: ${JSON.stringify(failures)}`,
+            'bridge trace:',
+            formatBridgeTrace(trace),
+          ].join('\n');
+          throw error;
+        }
+      } finally {
+        await context.close();
+      }
+    });
+  }
+});
+
+/** The shipped demo scene with only its device order reversed: the fallback
+ * selection then lands on Alice while every program, ID and radio setting
+ * stays exactly as authored. */
+function reverseDemoDeviceOrder() {
+  const bytes = readFileSync(join(projectRoot, 'examples/two-device-demo.swarm'));
+  const project = decodeSwarmBundle(new Uint8Array(bytes));
+  assert.equal(project.devices.length, 2, 'the demo scene ships exactly two devices');
+  const [first, ...rest] = project.devices;
+  const reversed = {
+    ...project,
+    devices: [...rest, first],
+  };
+  assert.deepEqual(reversed.devices.map((device) => device.id), ['alice', 'bob']);
+  return encodeSwarmBundle(reversed);
+}
+
+function collectFirstPartyFailures(page, failures) {
+  page.on('pageerror', (error) => failures.push(`pageerror: ${error.message}`));
+  page.on('requestfailed', (request) => {
+    if (!request.url().startsWith(origin)) return;
+    const errorText = request.failure()?.errorText ?? '';
+    if (/ERR_ABORTED|NS_BINDING_ABORTED/.test(errorText)) return;
+    failures.push(`requestfailed: ${request.url()} ${errorText}`);
+  });
+  page.on('response', (response) => {
+    if (!response.url().startsWith(origin)) return;
+    if (/\/favicon\.ico$/.test(new URL(response.url()).pathname)) return;
+    if (response.status() >= 400) failures.push(`http ${response.status()}: ${response.url()}`);
+  });
+}
+
+async function openBuilderDemo(page, scenario) {
+  await page.goto(`${origin}/nested/swarm/builder/index.html`, { waitUntil: 'domcontentloaded' });
+  await page.setInputFiles('#file-import', {
+    name: 'demo-activity.json',
+    mimeType: 'application/json',
+    buffer: readFileSync(join(projectRoot, 'examples/demo-activity.json')),
+  });
+  await page.waitForFunction(
+    () => document.getElementById('toast')?.textContent === 'Activity JSON imported.',
+    undefined,
+    { timeout: 20_000 },
+  );
+  // The panels the learner may open; the runtime log has to exist before its
+  // own filters can be tested. Configured on the config tab, which stays mounted.
+  if (scenario.filtersOff) {
+    // The checkbox sits under its own toggle track: press the row, like a user.
+    await page.locator('label', { has: page.locator('#panel-runtime-log') }).click();
+    assert.equal(await page.isChecked('#panel-runtime-log'), true);
+  }
+  await page.click('#tab-button-scenario');
+  await page.waitForFunction(
+    () => document.getElementById('scenario-status')?.textContent === 'Simulator connected.',
+    undefined,
+    { timeout: 30_000 },
+  );
+  if (scenario.scene) {
+    await page.setInputFiles('#file-scene', {
+      name: scenario.scene.name,
+      mimeType: 'application/octet-stream',
+      buffer: Buffer.from(scenario.scene.bytes),
+    });
+    await page.waitForFunction(
+      (name) => document.getElementById('scenario-status')?.textContent === `Loaded ${name}.`,
+      scenario.scene.name,
+      { timeout: 30_000 },
+    );
+  }
+  await page.click('#btn-capture-scene');
+  await page.waitForFunction(
+    () => document.getElementById('scenario-status')?.textContent === 'Scene captured.',
+    undefined,
+    { timeout: 30_000 },
+  );
+  await page.click('#tab-button-preview');
+  await page.waitForFunction(
+    () => document.getElementById('btn-check-session')?.disabled === false,
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+
+async function openPackagedDemo(page) {
+  await page.goto(`${origin}/nested/moodle/mod/scorm/radio-relay/index.html`, {
+    waitUntil: 'domcontentloaded',
+  });
+  await page.waitForFunction(
+    () => document.getElementById('status-bar')?.textContent.includes('Activity ready.'),
+    undefined,
+    { timeout: 30_000 },
+  );
+}
+
+/**
+ * Both programmed devices render a node and both run an actual MicroPython
+ * runtime. The runtime frames are visually hidden by design, so attachment and
+ * the prepared state are the readiness signals, never visibility.
+ */
+async function waitForDemoRuntimes(page, frameSelector) {
+  try {
+    await page.waitForFunction((selector) => {
+      const document_ = document.querySelector(selector)?.contentDocument;
+      if (!document_) return false;
+      const nodes = document_.querySelectorAll('[data-canvas-device-id]');
+      if (nodes.length !== 2) return false;
+      for (const name of ['Alice', 'Bob']) {
+        if (!document_.querySelector(`iframe[title="MicroPython simulator for ${name}"]`)) return false;
+      }
+      const prepared = [...document_.querySelectorAll('.runtime-frame-card__header span')]
+        .filter((span) => span.textContent.trim() === 'prepared')
+        .length;
+      return prepared === 2;
+    }, frameSelector, { timeout: 90_000, polling: 100 });
+  } catch (error) {
+    const state = await page.evaluate((selector) => {
+      const frame = document.querySelector(selector);
+      const document_ = frame?.contentDocument;
+      return {
+        frameSrc: frame?.getAttribute('src') ?? null,
+        frameUrl: frame?.contentWindow?.location?.href ?? null,
+        status: document_?.querySelector('#simulator-status')?.textContent ?? null,
+        nodes: [...(document_?.querySelectorAll('[data-canvas-device-id]') ?? [])]
+          .map((node) => node.getAttribute('data-canvas-device-id')),
+        headers: [...(document_?.querySelectorAll('.runtime-frame-card__header') ?? [])]
+          .map((header) => header.textContent.trim()),
+        loadResults: document_?.querySelector('.runtime-load-list')?.textContent?.trim() ?? null,
+      };
+    }, frameSelector);
+    error.message = `${error.message}\nruntime state: ${JSON.stringify(state)}`;
+    throw error;
+  }
+}
+
+/** A real pointer press on the device body, away from the A/B/A+B circles. */
+async function selectCanvasDevice(page, frameSelector, deviceId) {
+  const canvas = page.frameLocator(frameSelector);
+  await canvas.locator('[data-canvas-device-id="alice"]').waitFor({ state: 'attached' });
+  await canvas.locator('[data-canvas-device-id="bob"]').waitFor({ state: 'attached' });
+  await canvas
+    .locator(`[data-canvas-device-id="${deviceId}"] rect.microbit-body`)
+    .click({ position: { x: 8, y: 50 } });
+  await canvas.locator(`.microbit-node--selected[data-canvas-device-id="${deviceId}"]`)
+    .waitFor({ state: 'attached' });
+  assert.equal(await canvas.locator('.microbit-node--selected').count(), 1);
+}
+
+async function selectedCanvasDevice(page, frameSelector) {
+  return page.evaluate((selector) => {
+    const document_ = document.querySelector(selector)?.contentDocument;
+    return document_?.querySelector('.microbit-node--selected')?.getAttribute('data-canvas-device-id') ?? null;
+  }, frameSelector);
+}
+
+/** View-only log filters: they must change nothing but which rows are listed. */
+async function turnOffDiagnosticsFilters(page, frameSelector) {
+  const canvas = page.frameLocator(frameSelector);
+  await canvas.locator('button.canvas-control--runtime-log').click();
+  const filters = canvas.locator(`#runtime-log-panel .device-log__filters button`);
+  await filters.first().waitFor({ state: 'visible' });
+  for (const label of ['Serial', 'Radio']) {
+    const filter = filters.filter({ hasText: label });
+    if (await filter.getAttribute('aria-pressed') === 'true') await filter.click();
+  }
+  const state = {};
+  for (const label of ['Serial', 'Radio']) {
+    const filter = filters.filter({ hasText: label });
+    state[label.toLowerCase()] = await filter.getAttribute('aria-pressed') === 'true';
+  }
+  await canvas.locator('#runtime-log-panel .canvas-inspector__close').click();
+  return state;
+}
+
+/**
+ * A passive trace of the run feed the host itself receives: which device
+ * produced which event, its bridge sequence, and the canvas selection at that
+ * moment. It observes; it never sends.
+ */
+async function installSimulatorMessageTrace(page, frameSelector) {
+  await page.evaluate((selector) => {
+    const trace = [];
+    window.__demoBridgeTrace = trace;
+    const selectedNow = () => {
+      const document_ = document.querySelector(selector)?.contentDocument;
+      return document_?.querySelector('.microbit-node--selected')?.getAttribute('data-canvas-device-id') ?? null;
+    };
+    window.addEventListener('message', (event) => {
+      const frame = document.querySelector(selector);
+      if (!frame || event.source !== frame.contentWindow) return;
+      const message = event.data;
+      if (!message || message.source !== 'swarm-sim-bridge' || message.v !== 1) return;
+      if (trace.length >= 500) return;
+      const entry = { at: Math.round(performance.now()), type: message.type, selected: selectedNow() };
+      if (message.type === 'event') {
+        const payload = message.payload ?? {};
+        const delivered = payload.event ?? {};
+        entry.seq = payload.seq ?? null;
+        entry.ts = payload.ts ?? null;
+        entry.kind = delivered.kind ?? null;
+        entry.device = delivered.device_id ?? null;
+        if (typeof delivered.from_device_id === 'string') entry.from = delivered.from_device_id;
+        if (typeof delivered.reason === 'string') entry.reason = delivered.reason;
+        if (delivered.kind === 'serial') entry.text = String(delivered.text ?? '').slice(0, 40);
+        if (delivered.kind === 'button') entry.button = `${delivered.button}:${delivered.pressed}`;
+        if (delivered.kind === 'radio-tx' || delivered.kind === 'radio-rx') {
+          entry.packet = delivered.packet?.data_b64 ?? null;
+        }
+      } else {
+        entry.id = message.id ?? null;
+        if (message.type === 'display') entry.devices = Object.keys(message.payload?.displays ?? {});
+      }
+      trace.push(entry);
+    }, true);
+  }, frameSelector);
+}
+
+function formatBridgeTrace(trace) {
+  if (!Array.isArray(trace) || trace.length === 0) return '  (empty)';
+  return trace
+    .map((entry) => {
+      const parts = [String(entry.at), entry.type];
+      if (entry.kind) parts.push(entry.kind);
+      if (entry.device) parts.push(`dev=${entry.device}`);
+      if (entry.from) parts.push(`from=${entry.from}`);
+      if (entry.reason) parts.push(`reason=${entry.reason}`);
+      if (entry.button) parts.push(`button=${entry.button}`);
+      if (entry.text) parts.push(`text=${JSON.stringify(entry.text)}`);
+      if (entry.seq !== undefined && entry.seq !== null) parts.push(`seq=${entry.seq}`);
+      if (entry.id) parts.push(`id=${entry.id}`);
+      if (entry.devices) parts.push(`devices=${entry.devices.join(',')}`);
+      parts.push(`sel=${entry.selected}`);
+      return `  ${parts.join(' ')}`;
+    })
+    .join('\n');
+}
+
+/**
  * Inject a scene bundle exactly the way the app bridge would: a load-bundle
  * command posted into the simulator frame. The stub echoes it, emits code-load,
  * and the app's debounced save runs against the injected content.
@@ -420,8 +821,13 @@ async function startServer() {
       response.writeHead(400).end('Bad request');
       return;
     }
-    const target = resolve(packageRoot, `.${pathname}`);
-    if (target !== packageRoot && !target.startsWith(`${packageRoot}${sep}`)) {
+    const mount = nestedMounts.find(([prefix]) => pathname.startsWith(prefix));
+    const root = mount ? mount[1] : packageRoot;
+    // Every mount serves the directory tree under its own prefix, index.html
+    // included; nothing here knows what a simulator or a package looks like.
+    const relative = mount ? `/${pathname.slice(mount[0].length)}` : pathname;
+    const target = resolve(root, `.${relative}`);
+    if (target !== root && !target.startsWith(`${root}${sep}`)) {
       response.writeHead(403).end('Forbidden');
       return;
     }
