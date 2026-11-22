@@ -1,3 +1,5 @@
+import { parseLedLayout } from './led-display.js';
+
 const textDecoder = new TextDecoder('utf-8');
 
 export function createGrader() {
@@ -290,20 +292,26 @@ function evaluateSensorCondition(condition, latestSensors, now) {
 }
 
 function evaluateDisplayCondition(condition, latestDisplays) {
+  const layout = parseLedLayout(condition.layout);
+  if (!layout) return { passed: false, matchCount: 0 };
   let matchCount = 0;
   for (const latest of latestDisplays.values()) {
     if (!matchesDevice(condition.device_id, latest.device_id)) continue;
-    if (!matchesLedLayout(condition.layout, latest.pixels)) continue;
+    if (!matchesLedLayout(layout, latest.pixels)) continue;
     matchCount += 1;
   }
   return { passed: matchCount > 0, matchCount };
 }
 
+/**
+ * Authored `0`/`.` require an unlit cell; any `1`–`9`/`#` requires a lit cell.
+ * Brightness is presentation only, so legacy `1` masks keep matching any
+ * nonzero pixel exactly as before.
+ */
 function matchesLedLayout(layout, pixels) {
-  if (!/^[#.01]{5}(?:\n[#.01]{5}){4}$/.test(layout) || !Array.isArray(pixels) || pixels.length !== 25) return false;
-  const cells = layout.replaceAll('\n', '');
+  if (!Array.isArray(pixels) || pixels.length !== 25) return false;
   for (let index = 0; index < 25; index += 1) {
-    const layoutLit = cells[index] === '#' || cells[index] === '1';
+    const layoutLit = layout[index] > 0;
     const pixelLit = pixels[index] > 0;
     if (layoutLit !== pixelLit) return false;
   }

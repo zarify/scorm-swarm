@@ -51,7 +51,7 @@ export function createDefaultCondition(type = 'serial_output') {
     case 'sensor_reading':
       return { type, device_id: null, sensor: 'lightLevel', min: null, max: null, min_duration_seconds: 0 };
     case 'led_display':
-      return { type, device_id: null, layout: '.....\n.....\n.....\n.....\n.....' };
+      return { type, device_id: null, layout: '00000\n00000\n00000\n00000\n00000' };
     case 'node_distance':
       return { type, node_a: null, node_b: null, min: null, max: 100 };
     case 'serial_output':
@@ -292,7 +292,7 @@ function renderLeafFields(condition, onChange, scene) {
       textarea.addEventListener('change', () => update(condition, 'layout', textarea.value, onChange));
       const help = document.createElement('small');
       help.className = 'field-help';
-      help.textContent = 'Five rows of five characters: # or 1 = lit, . or 0 = unlit.';
+      help.textContent = 'Five rows of five characters. 0 or . = off; 1–9 or # = on for grading.';
       layoutField.append(textarea, help);
       fields.append(layoutField);
       break;

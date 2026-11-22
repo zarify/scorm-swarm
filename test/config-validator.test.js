@@ -266,6 +266,15 @@ test('led_display conditions validate layout and characters', () => {
   });
   assert.deepEqual(valid, { valid: true, errors: [] });
 
+  const mixedDigits = invalidConfig((config) => {
+    config.evaluation.test_cases[0].steps[0].condition = {
+      type: 'led_display',
+      device_id: 'alice',
+      layout: '01234\n56789\n00000\n#####\n.....',
+    };
+  });
+  assert.deepEqual(mixedDigits, { valid: true, errors: [] });
+
   const badLayout = invalidConfig((config) => {
     config.evaluation.test_cases[0].steps[0].condition = {
       type: 'led_display',

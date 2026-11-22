@@ -11,7 +11,7 @@
     "move_nodes": false,
     "use_buttons": true,
     "load_code": false,
-    "edit_code": false
+    "edit_code": true
   },
   "evaluation": {
     "test_cases": [
@@ -21,7 +21,13 @@
         "feedback_on_pass": "Alice printed \"button a\" on her serial line.",
         "feedback_on_fail": "Press Alice's A button and wait for \"button a\" on her serial output.",
         "trigger": [
-          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+          {
+            "type": "press_button",
+            "device_id": "alice",
+            "button": "A",
+            "count": 1,
+            "interval_ms": 0
+          }
         ],
         "steps": [
           {
@@ -41,10 +47,16 @@
       {
         "id": "button-a-display",
         "points": 2,
-        "feedback_on_pass": "Alice's display shows the Image.HAPPY frame ..... / .#.#. / ..... / #...# / .###. (# = lit).",
-        "feedback_on_fail": "Press Alice's A button; her display must show the Image.HAPPY frame ..... / .#.#. / ..... / #...# / .###. (# = lit).",
+        "feedback_on_pass": "Alice's display shows the Image.HAPPY frame:\n```led\n00000\n09090\n00000\n90009\n09990\n```",
+        "feedback_on_fail": "Press Alice's A button; her display must show:\n```led\n00000\n09090\n00000\n90009\n09990\n```",
         "trigger": [
-          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+          {
+            "type": "press_button",
+            "device_id": "alice",
+            "button": "A",
+            "count": 1,
+            "interval_ms": 0
+          }
         ],
         "steps": [
           {
@@ -52,7 +64,7 @@
             "condition": {
               "type": "led_display",
               "device_id": "alice",
-              "layout": ".....\n.#.#.\n.....\n#...#\n.###."
+              "layout": "00000\n09090\n00000\n90009\n09990"
             },
             "timeout_ms": 5000
           }
@@ -64,7 +76,13 @@
         "feedback_on_pass": "Bob received Alice's \"ping\" on radio group 42.",
         "feedback_on_fail": "Open Bob's Radio inspector: he should receive Alice's \"ping\" on group 42.",
         "trigger": [
-          { "type": "press_button", "device_id": "alice", "button": "A", "count": 1, "interval_ms": 0 }
+          {
+            "type": "press_button",
+            "device_id": "alice",
+            "button": "A",
+            "count": 1,
+            "interval_ms": 0
+          }
         ],
         "steps": [
           {
@@ -75,7 +93,11 @@
               "from_device_id": "alice",
               "channel": null,
               "group": 42,
-              "payload": { "match": "contains", "value": "ping", "case_sensitive": true },
+              "payload": {
+                "match": "contains",
+                "value": "ping",
+                "case_sensitive": true
+              },
               "rssi_min": null,
               "rssi_max": null,
               "min_count": 1

@@ -450,7 +450,7 @@ function validateConditionInto(condition, path, errors, allowNodeDistance = fals
 
   if (type === 'led_display') {
     if (typeof condition.layout !== 'string' || !new RegExp(VALID_LAYOUT_PATTERN).test(condition.layout)) {
-      errors.push({ path: `${path}.layout`, message: 'must be five rows of five characters (#/1 lit, ./0 unlit) separated by newlines' });
+      errors.push({ path: `${path}.layout`, message: 'must be five rows of five characters (#/1–9 lit, ./0 unlit) separated by newlines' });
     }
     return;
   }

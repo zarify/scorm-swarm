@@ -105,6 +105,16 @@ test('led_display matches the latest display frame as lit/unlit cells', () => {
   assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: '.....\n.....\n.....\n.....\n.....' }, 1100).passed, true);
   grader.reset();
   assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: '.....\n.....\n.....\n.....\n.....' }, 1100).passed, false);
+
+  // Mixed digit masks grade lit/unlit only: any nonzero brightness matches a
+  // required lit cell, and a zero pixel cannot satisfy one.
+  const mixedLayout = '00000\n09090\n00000\n90009\n09990';
+  grader.record(envelope(3, 1200, { kind: 'display', device_id: 'alice', pixels: HAPPY_FRAME.map((value) => (value > 0 ? 4 : 0)) }));
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: mixedLayout }, 1200).passed, true);
+  const zeroedLitCell = HAPPY_FRAME.slice();
+  zeroedLitCell[6] = 0;
+  grader.record(envelope(4, 1300, { kind: 'display', device_id: 'alice', pixels: zeroedLitCell }));
+  assert.equal(grader.evaluate({ type: 'led_display', device_id: 'alice', layout: mixedLayout }, 1300).passed, false);
 });
 
 test('led_display ignores zero-value pixels and short frames', () => {
