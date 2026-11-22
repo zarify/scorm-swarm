@@ -1,16 +1,25 @@
 # Micro:bit Swarm SCORM
 
-A browser-based activity builder and SCORM 1.2 learning package for activities using a Micro:bit swarm simulator. Teachers can prepare a simulator scene, write instructions and hints, define automated checks, preview the learner experience, then export the activity for use in Moodle.
+A browser-based activity builder and SCORM 1.2 learning package for activities using a simulated micro:bit devices
+and environmental nodes. You can find the [simulator this is based on here](https://github.com/zarify/swarm_sim).
+
+With this tool you can prepare a simulator scene with one or more micro:bit devices, light, sound, and temperature nodes.
+The devices and nodes are all configurable, different micro:bit devices can each be running separate programs (either
+MakeCode or Micropython), and can communicate with each other via radio as well as be interacted with through their buttons.
+
+Some functionality has been deliberately left out. See [the main simulator repo](https://github.com/zarify/swarm_sim) for
+details and justification.
+
+> [!INFO] LMSes
+> This has been tested with Moodle 4.5. Other LMS that support SCORM haven't been tested. YMMV.
 
 ## What it does
 
-- Lets activity authors configure an activity and its swarm simulator scene in a browser-based builder.
-- Supports hints and checks that evaluate learner progress as they use the simulator.
-- Tests can script node movement and compare node positions: a check can move an environment node and assert the live distance between two nodes.
-- Authors can show the selected node's live X/Y canvas position to learners as an opt-in student panel.
-- Tests and hints can be reordered by drag or keyboard, and long editor sections collapse so a test's identity, trigger, flow, and feedback stay readable.
-- Saves learner progress so an activity can be resumed later.
+- Author scenario layout, nodes, and devices.
+- Provide interactive hints to students based on events in the simulation like radio messages, button presses and more.
+- Author tests using chained triggers and conditions for marking to pass back to an LMS.
 - Exports an activity as a SCORM package for uploading to a learning management system, or as activity JSON for reuse.
+- Saves learner progress so an activity can be resumed later.
 
 ## Quick start
 
@@ -25,13 +34,7 @@ npm run dev
 
 `npm run vendor:sim` fetches the public [`swarm_sim`](https://github.com/zarify/swarm_sim) project at `v0.16.1`, applies this repository's simulator patches, and builds the simulator locally. The generated `vendor/` and `dist/` directories are gitignored; no sibling checkout or machine-specific path is needed. To use a local simulator checkout while developing, set `SWARM_SIM_SRC` to its path.
 
-To create a SCORM ZIP from a built package:
-
-```sh
-npm run export
-```
-
-The builder can also export a SCORM package directly.
+Using `npm run dev` will fire up the authoring interface on port `3000`. JSON or SCORM zips can be exported from there.
 
 ## Requirements
 
@@ -42,24 +45,3 @@ The builder can also export a SCORM package directly.
 
 The learner activity runs in the browser and communicates with the simulator embedded in the page. No project-specific Moodle plugin is needed.
 
-## Versioning
-
-The authoring tool's own version is the `version` field in `package.json` (semver,
-shown as `vX.Y.Z` in the builder header next to the title). `scripts/build.js`
-injects it into the builder bundle at build time. It is independent of the sibling
-tools' versions and of the vendored simulator version (`v0.16.1`, pinned by
-`scripts/vendor-sim.js`); shared fixes are ported as separate commits, never
-version-synced.
-
-Bump rules — the public surface is the builder, `activity_config.json` + `.swarm`
-scenes, and the exported SCORM runtime:
-
-- **Patch** — fixes that cannot change accepted configs or exported packages
-  (UI defects, wording, performance).
-- **Minor** — new builder, test, or runtime capability; previously valid
-  `activity_config.json` and `.swarm` files keep importing, validating, and
-  grading the same.
-- **Major** — released configs or scenes stop importing or validating, or
-  exported SCORM packages change grading semantics.
-
-Release = bump `package.json`, rebuild, commit, tag `vX.Y.Z`.
