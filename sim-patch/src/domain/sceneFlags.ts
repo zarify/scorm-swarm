@@ -145,9 +145,6 @@ function setDeviceEditableProgram(
   const activeSnapshot = getActiveEditableProgram(device);
 
   if (value) {
-    if (device.locked) {
-      throw new Error('Cannot make code editable on a locked device.');
-    }
     if (activeSnapshot) {
       return project;
     }
@@ -156,9 +153,13 @@ function setDeviceEditableProgram(
       throw new Error('This device has no editable source.');
     }
     const runtimeProgram = buildRuntimeProgramFromArtifactProgram(artifact);
+    const snapshot = createEditableProgramSnapshot(artifact.id, runtimeProgram, now);
+    // Authoring shortcut: unlocking and enabling edits is one atomic change.
+    // A missing program or a failed reconstruction throws before this point, so
+    // the original project (lock, artifact, pin) stays untouched.
     return replaceDevice(
       project,
-      { ...device, editableProgram: createEditableProgramSnapshot(artifact.id, runtimeProgram, now) },
+      { ...omitFlag(device, 'locked'), editableProgram: snapshot },
       project.artifacts,
     );
   }

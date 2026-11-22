@@ -62,8 +62,6 @@
               <label class="capability-row"><span><strong>Move devices</strong><small>Drag micro:bits across the canvas.</small></span><input type="checkbox" id="cap-move-devices"><span class="toggle-track" aria-hidden="true"></span></label>
               <label class="capability-row"><span><strong>Move environment nodes</strong><small>Reposition lights, sound, temperature, and magnets.</small></span><input type="checkbox" id="cap-move-nodes"><span class="toggle-track" aria-hidden="true"></span></label>
               <label class="capability-row"><span><strong>Press buttons</strong><small>Use A, B, and A+B inputs.</small></span><input type="checkbox" id="cap-use-buttons"><span class="toggle-track" aria-hidden="true"></span></label>
-              <label class="capability-row"><span><strong>Load code</strong><small>Upload a HEX program in the simulator.</small></span><input type="checkbox" id="cap-load-code"><span class="toggle-track" aria-hidden="true"></span></label>
-              <label class="capability-row"><span><strong>Edit code</strong><small>Inspect or edit a device's editable source.</small></span><input type="checkbox" id="cap-edit-code"><span class="toggle-track" aria-hidden="true"></span></label>
             </section>
             <section class="form-section panel-visibility-card">
               <h2>Student canvas panels</h2>
@@ -94,9 +92,15 @@
           </section>
           <section class="scene-card">
             <h2>Devices &amp; nodes</h2>
+            <section class="scene-permissions" aria-labelledby="scene-permissions-title">
+              <h3 id="scene-permissions-title">Learner code permissions</h3>
+              <p class="section-note">These switches apply to the whole activity in Preview and the packaged learner package.</p>
+              <label class="capability-row"><span><strong>Edit code</strong><small>Allow changes to editable device source. Off allows viewing editable source without saving changes.</small></span><input type="checkbox" id="cap-edit-code"><span class="toggle-track" aria-hidden="true"></span></label>
+              <label class="capability-row"><span><strong>Load or remove code</strong><small>Allow uploading, replacing, or unloading device programs where the scene permits it.</small></span><input type="checkbox" id="cap-load-code"><span class="toggle-track" aria-hidden="true"></span></label>
+            </section>
             <div id="scene-empty" class="empty-state"><strong>No scene captured yet</strong><p>Add devices or environment nodes in the simulator, then select Capture scene.</p></div>
             <div id="scene-table-wrap" class="scene-table-wrap" hidden>
-              <p class="scene-table-note">Use the locks below to set each object's authored starting rules.</p>
+              <p class="scene-table-note">Imported settings are starting points. Changes here replace them for Preview and export. Unlocking a device does not unpin it.</p>
               <div id="scene-table"></div>
             </div>
           </section>

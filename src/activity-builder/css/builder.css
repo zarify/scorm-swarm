@@ -522,6 +522,10 @@ body {
 .simulator-card h2, .scene-card h2 { margin-bottom: 12px; }
 .simulator-card iframe { flex: 1; width: 100%; min-height: 500px; border: 0; background: #fff; }
 .scene-card { overflow: hidden; }
+.scene-permissions { display: grid; flex: none; gap: 2px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid #eee; }
+.scene-permissions h3 { margin: 0; color: #333; font-size: 13px; text-transform: uppercase; letter-spacing: .04em; }
+.scene-permissions .section-note { margin: 4px 0 2px; font-size: 12px; }
+.scene-permissions .capability-row { min-height: 48px; padding: 8px 0; }
 .empty-state { display: grid; align-content: center; justify-items: start; gap: 7px; flex: 1; min-height: 260px; padding: 24px; color: #666; }
 .empty-state strong { color: #333; font-size: 18px; }
 .empty-state p { max-width: 320px; font-size: 13px; line-height: 1.5; }

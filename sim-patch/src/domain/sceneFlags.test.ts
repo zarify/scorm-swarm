@@ -337,6 +337,45 @@ describe('scene flag transforms', () => {
     expect(decoder.decode(prepared.filesystem['main.py']!)).toBe('print("locked-current-µ")\n');
   });
 
+  it('unlocks and enables edits atomically from the locked device’s stored source', async () => {
+    const project = makeProject();
+    const pinned = setSceneFlag(
+      project,
+      { kind: 'device', id: 'device-1', flag: 'positionPinned', value: true },
+      later,
+    );
+    const locked = setSceneFlag(pinned, lockChange('device-1', true), later);
+    const lockedDevice = device(locked, 'device-1');
+    expect(lockedDevice.locked).toBe(true);
+    expect(lockedDevice.positionPinned).toBe(true);
+    const promotedId = lockedDevice.programArtifactId!;
+    expect(promotedId).not.toBe('mp-beacon');
+
+    const enabled = setSceneFlag(locked, editableChange('device-1', true), later);
+    const enabledDevice = device(enabled, 'device-1');
+
+    expect(enabledDevice).not.toHaveProperty('locked');
+    expect(enabledDevice.positionPinned).toBe(true);
+    expect(enabledDevice.programArtifactId).toBe(promotedId);
+    expect(enabled.artifacts).toEqual(locked.artifacts);
+    expect(enabledDevice.editableProgram).toMatchObject({
+      runtimeSource: 'micropython',
+      baseArtifactId: promotedId,
+      revision: 0,
+      updatedAt: later,
+    });
+    if (enabledDevice.editableProgram?.runtimeSource !== 'micropython') {
+      throw new Error('expected a MicroPython editable snapshot');
+    }
+    expect(enabledDevice.editableProgram.files['main.py']).toBe('print("locked-current-µ")\n');
+
+    const prepared = preparedProgram(await prepareDeviceRuntimeProgram(enabled, enabledDevice));
+    if (prepared.source !== 'micropython') {
+      throw new Error('expected the restored source to run');
+    }
+    expect(decoder.decode(prepared.filesystem['main.py']!)).toBe('print("locked-current-µ")\n');
+  });
+
   it('turns editable code off and on again without losing the source', () => {
     const project = makeProject();
     const off = setSceneFlag(project, editableChange('device-1', false), later);
@@ -468,10 +507,6 @@ describe('scene flag transforms', () => {
       later,
     )).toThrow('Unknown scene node: ghost');
 
-    const locked = setSceneFlag(project, lockChange('device-1', true), later);
-    expect(() => setSceneFlag(locked, editableChange('device-1', true), later)).toThrow(
-      'Cannot make code editable on a locked device.',
-    );
     expect(() => setSceneFlag(project, editableChange('device-3', true), later)).toThrow(
       'This device has no editable source.',
     );
@@ -489,12 +524,19 @@ describe('scene flag transforms', () => {
         },
       ],
       devices: [
-        { id: 'device-1', name: 'Node 1', position: { x: 10, y: 10 }, programArtifactId: 'legacy' },
+        {
+          id: 'device-1',
+          name: 'Node 1',
+          position: { x: 10, y: 10 },
+          locked: true,
+          programArtifactId: 'legacy',
+        },
       ],
     };
     expect(() => setSceneFlag(bytesOnly, editableChange('device-1', true), later)).toThrow(
       'This device has no editable source.',
     );
+    expect(device(bytesOnly, 'device-1').locked).toBe(true);
 
     const missingArtifact: SwarmProject = {
       ...project,

@@ -3,7 +3,9 @@ import { connectSimBridge } from '../../shared/sim-bridge.js';
 import { getSceneBundle, getSceneProject, onSceneChange, setSceneBundle, showToast } from './app.js';
 
 const REQUEST_TIMEOUT_MS = 10_000;
-const UNLOCK_FOR_EDIT_TOOLTIP = 'Unlock this device to change whether its code is editable.';
+const UNLOCK_AND_EDIT_TOOLTIP =
+  'Remove this device’s lock and allow source editing. Its pin is unchanged.';
+const LOCKED_NO_SOURCE_TOOLTIP = 'Unlock this device, then load or create editable code first.';
 const NO_EDITABLE_CODE_TOOLTIP = 'Load or edit code on this device in the simulator first.';
 
 let bridge;
@@ -252,26 +254,31 @@ function renderSceneTable() {
 
 /**
  * The checkbox reflects the *active* editable snapshot on an unlocked device.
- * Whether it can be checked at all depends on the assigned artifact carrying a
- * recoverable program: a locked device must first be unlocked, and an
- * artifact-free device has nothing to reconstruct source from.
+ * A locked device whose assigned artifact still carries a program can be
+ * unlocked and made editable in one author action; a locked device without
+ * stored source stays disabled until code exists. An artifact-free device has
+ * nothing to reconstruct source from.
  */
 function describeDeviceEditableCode(device) {
   const artifact = device.programArtifactId
     ? (currentProject?.artifacts ?? []).find((candidate) => candidate.id === device.programArtifactId)
     : undefined;
+  const hasStoredProgram = Boolean(artifact && 'program' in artifact);
   const checked = Boolean(
     !device.locked &&
       device.editableProgram &&
       device.editableProgram.baseArtifactId === device.programArtifactId,
   );
   if (device.locked) {
-    return { checked: false, disabled: true, title: UNLOCK_FOR_EDIT_TOOLTIP };
+    if (hasStoredProgram) {
+      return { checked: false, disabled: false, canUnlockAndEdit: true, title: UNLOCK_AND_EDIT_TOOLTIP };
+    }
+    return { checked: false, disabled: true, canUnlockAndEdit: false, title: LOCKED_NO_SOURCE_TOOLTIP };
   }
-  if (!artifact || !('program' in artifact)) {
-    return { checked: false, disabled: true, title: NO_EDITABLE_CODE_TOOLTIP };
+  if (!hasStoredProgram) {
+    return { checked: false, disabled: true, canUnlockAndEdit: false, title: NO_EDITABLE_CODE_TOOLTIP };
   }
-  return { checked, disabled: false, title: undefined };
+  return { checked, disabled: false, canUnlockAndEdit: false, title: undefined };
 }
 
 function renderSceneRow({ name, id, kind, position, locked, positionPinned, editableProgram, onFlagChange }) {
@@ -293,6 +300,18 @@ function renderSceneRow({ name, id, kind, position, locked, positionPinned, edit
     flagCell('locked', locked, (value) => onFlagChange('locked', value)),
     flagCell('positionPinned', positionPinned, (value) => onFlagChange('positionPinned', value)),
   );
+  if (editableProgram.canUnlockAndEdit) {
+    const cell = document.createElement('td');
+    const unlock = document.createElement('button');
+    unlock.type = 'button';
+    unlock.className = 'btn btn-small btn-secondary';
+    unlock.textContent = 'Unlock & enable edits';
+    unlock.title = editableProgram.title;
+    unlock.addEventListener('click', () => onFlagChange('editableProgram', true));
+    cell.append(unlock);
+    row.append(cell);
+    return row;
+  }
   const editable = flagCell('editableProgram', editableProgram.checked, (value) =>
     onFlagChange('editableProgram', value),
   );
