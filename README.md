@@ -10,7 +10,8 @@ MakeCode or Micropython), and can communicate with each other via radio as well 
 Some functionality has been deliberately left out. See [the main simulator repo](https://github.com/zarify/swarm_sim) for
 details and justification.
 
-> [!NOTE] LMSes
+> [!NOTE]
+> **LMSes**
 > This has been tested with Moodle 4.5. Other LMS that support SCORM haven't been tested. YMMV. Drop in an issue if
 > things don't work, but no promises if I can't test it.
 
