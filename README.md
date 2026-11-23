@@ -47,3 +47,11 @@ Using `npm run dev` will fire up the authoring interface on port `3000`. JSON or
 
 The learner activity runs in the browser and communicates with the simulator embedded in the page. No project-specific Moodle plugin is needed.
 
+> [!NOTE]
+> **LLMs**
+> 
+> This and the original simulator were built with me directing the clanker. I do a bunch of manual testing, but
+> there may be ...interesting... implementation details hiding under the hood. Your adoption and value may depend
+> on where you like to sit on the "it does what it says it does" <--> "everything in the internals are well understood"
+> scale.
+
